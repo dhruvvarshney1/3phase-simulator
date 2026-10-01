@@ -15,7 +15,7 @@ from simulator import run_simulation
 
 def generate_dataset(n_cases: int, output: str, seed: int = 2024) -> None:
     rng = np.random.default_rng(seed)
-    feature_batches, target_batches = [], []
+    feature_batches, target_batches, group_batches = [], [], []
     for case in range(n_cases):
         cfg = smoke_test_config()
         cfg = override(cfg, "fractal", seed=int(rng.integers(0, 2**31 - 1)))
@@ -33,10 +33,11 @@ def generate_dataset(n_cases: int, output: str, seed: int = 2024) -> None:
             x_target = pack_state(target["p"], target["Sw"], target["Sg"])
             feature_batches.append(build_features(x_current, model, t1 - t0, t0))
             target_batches.append(x_target.reshape(-1, 3))
+            group_batches.append(np.full(model.grid.n_cells, case, dtype=int))
         print(f"case {case + 1}/{n_cases}: {len(times) - 1} transitions")
     if not feature_batches:
         raise RuntimeError("no transitions were produced; check the report-time configuration")
-    save_dataset(output, np.vstack(feature_batches), np.vstack(target_batches))
+    save_dataset(output, np.vstack(feature_batches), np.vstack(target_batches), np.concatenate(group_batches))
     print(f"wrote {sum(batch.shape[0] for batch in feature_batches)} rows to {output}")
 
 

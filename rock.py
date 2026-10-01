@@ -54,6 +54,8 @@ class Rock:
     pressure_dependent: bool
     c_r: float
     p_ref: float
+    perm_y: np.ndarray | None = None
+    perm_z: np.ndarray | None = None
 
     def porosity(self, p: np.ndarray | float | None = None) -> np.ndarray:
         """Return porosity at pressure ``p``; ``phi0`` if pressure dependence is off."""
@@ -76,6 +78,13 @@ class Rock:
             "k_max": float(self.perm.max()),
         }
 
+    @property
+    def directional_perm(self) -> np.ndarray:
+        """Return ``(kx, ky, kz)`` [md], retaining anisotropy at the boundary."""
+        return np.column_stack((self.perm,
+                                self.perm if self.perm_y is None else self.perm_y,
+                                self.perm if self.perm_z is None else self.perm_z))
+
 
 def build_rock(cfg: SimulationConfig, grid: Grid, phi_field: np.ndarray | None = None) -> Rock:
     """Build the :class:`Rock` for ``cfg`` on ``grid``.
@@ -88,7 +97,7 @@ def build_rock(cfg: SimulationConfig, grid: Grid, phi_field: np.ndarray | None =
         if phi0.size != grid.n_cells:
             raise ValueError("phi_field must have one value per cell")
     elif cfg.rock.use_fractal:
-        phi0 = generate_porosity(grid.nx, grid.ny, cfg.fractal).ravel()
+        phi0 = generate_porosity(grid.nx, grid.ny, cfg.fractal, nz=grid.nz).ravel()
     else:
         phi0 = np.full(grid.n_cells, cfg.rock.phi_const, dtype=float)
     if np.any(phi0 <= 0.0) or np.any(phi0 >= 1.0):

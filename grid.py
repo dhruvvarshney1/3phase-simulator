@@ -1,8 +1,8 @@
-"""grid.py -- 2D Cartesian grid, face connectivity and global unknown ordering.
+"""grid.py -- 3D Cartesian grid, face connectivity and global unknown ordering.
 
 Cell indexing (README section 4.1)
 ----------------------------------
-    cell_index(i, j) = j * nx + i        (i along x, j along y, zero-based)
+    cell_index(i, j, k) = k * ny * nx + j * nx + i
 
 Global unknown ordering (README section 4.2) -- CELL-BLOCKED
 ------------------------------------------------------------
@@ -15,13 +15,14 @@ The three primary unknowns of cell ``c`` are stored contiguously:
 The residual uses the same blocking: row ``3*c + 0`` is the water equation,
 ``3*c + 1`` the oil equation, ``3*c + 2`` the gas equation of cell ``c``.
 Each Jacobian row then couples only to its own cell and its <= 4 neighbours,
-giving <= 15 nonzero columns per row. This ordering is used identically in
+    giving <= 21 nonzero columns per row. This ordering is used identically in
 ``residual.py``, ``jacobian.py`` and ``newton_solver.py``.
 
 Faces
 -----
 All interior faces are stored in flat arrays, x-direction faces first, then
-y-direction faces. Boundaries are no-flow, so no boundary faces exist.
+y-direction and z-direction faces. Boundaries are no-flow, so no boundary faces
+exist.
 """
 
 from __future__ import annotations
@@ -40,25 +41,27 @@ IDX_SW: int = 1
 IDX_SG: int = 2
 
 # Neighbour slots in ``Grid.neighbors`` columns
-WEST, EAST, SOUTH, NORTH = 0, 1, 2, 3
+WEST, EAST, SOUTH, NORTH, BOTTOM, TOP = 0, 1, 2, 3, 4, 5
 
 
 @dataclass(frozen=True, eq=False)
 class Grid:
-    """Immutable 2D Cartesian grid with precomputed connectivity.
+    """Immutable 3D Cartesian grid with precomputed connectivity.
 
     Attributes
     ----------
     nx, ny, nz, dx, dy, dz : grid dimensions (ft for spacings).
-    n_cells : nx * ny.
-    i_idx, j_idx : (n_cells,) integer cell coordinates.
-    x_center, y_center : (n_cells,) cell-centre coordinates in ft.
+    n_cells : nx * ny * nz.
+    i_idx, j_idx, k_idx : (n_cells,) integer cell coordinates.
+    x_center, y_center, z_center : (n_cells,) cell-centre coordinates in ft.
+    depth : (n_cells,) cell-centre depth [ft], positive downward (gravity uses this;
+        defaults to z_center, i.e. k = 0 is the top layer of a flat model).
     bulk_volume : (n_cells,) bulk volume dx*dy*dz [ft^3].
-    neighbors : (n_cells, 4) neighbour cell indices (W, E, S, N); -1 = boundary.
+    neighbors : (n_cells, 6) neighbour cell indices (W, E, S, N, bottom, top).
     face_left, face_right : (n_faces,) cell indices on either side of each face.
-    face_dir : (n_faces,) 0 for x-direction face, 1 for y-direction face.
-    face_area : (n_faces,) flow area [ft^2] (dy*dz for x faces, dx*dz for y faces).
-    face_length : (n_faces,) centre-to-centre distance [ft] (dx or dy).
+    face_dir : (n_faces,) 0 for x, 1 for y, 2 for z faces.
+    face_area : (n_faces,) flow area [ft^2].
+    face_length : (n_faces,) centre-to-centre distance [ft].
     face_geom : (n_faces,) A / L [ft], the geometric factor of the transmissibility.
     n_xfaces : number of x-direction faces (they occupy the first slots).
     """
@@ -72,8 +75,10 @@ class Grid:
     n_cells: int
     i_idx: np.ndarray
     j_idx: np.ndarray
+    k_idx: np.ndarray
     x_center: np.ndarray
     y_center: np.ndarray
+    z_center: np.ndarray
     bulk_volume: np.ndarray
     neighbors: np.ndarray
     face_left: np.ndarray
@@ -83,6 +88,7 @@ class Grid:
     face_length: np.ndarray
     face_geom: np.ndarray
     n_xfaces: int
+    depth: np.ndarray
 
     # ------------------------------------------------------------------
     @property
@@ -101,37 +107,48 @@ class Grid:
         return NVAR * self.n_cells
 
     @property
-    def shape(self) -> Tuple[int, int]:
-        """Array shape (ny, nx) for reshaping flat cell arrays into maps."""
-        return (self.ny, self.nx)
+    def shape(self) -> Tuple[int, int, int]:
+        """Array shape (nz, ny, nx) for reshaping flat cell arrays."""
+        return (self.nz, self.ny, self.nx)
 
     # ------------------------------------------------------------------
-    def cell_index(self, i: np.ndarray | int, j: np.ndarray | int) -> np.ndarray | int:
-        """Return the flat cell index ``j*nx + i`` (validates bounds)."""
-        ia, ja = np.asarray(i), np.asarray(j)
-        if np.any(ia < 0) or np.any(ia >= self.nx) or np.any(ja < 0) or np.any(ja >= self.ny):
-            raise ValueError(f"cell coordinates ({i}, {j}) outside {self.nx}x{self.ny} grid")
-        result = ja * self.nx + ia
+    def cell_index(self, i: np.ndarray | int, j: np.ndarray | int,
+                   k: np.ndarray | int = 0) -> np.ndarray | int:
+        """Return ``k*ny*nx + j*nx + i`` after validating bounds."""
+        ia, ja, ka = np.asarray(i), np.asarray(j), np.asarray(k)
+        if (np.any(ia < 0) or np.any(ia >= self.nx) or np.any(ja < 0)
+                or np.any(ja >= self.ny) or np.any(ka < 0) or np.any(ka >= self.nz)):
+            raise ValueError(f"cell coordinates ({i}, {j}, {k}) outside {self.nx}x{self.ny}x{self.nz} grid")
+        result = ka * self.ny * self.nx + ja * self.nx + ia
         return int(result) if np.ndim(result) == 0 else result
 
-    def cell_ij(self, index: np.ndarray | int) -> Tuple[np.ndarray | int, np.ndarray | int]:
-        """Return (i, j) for a flat cell index."""
+    def cell_ijk(self, index: np.ndarray | int) -> Tuple[np.ndarray | int, np.ndarray | int, np.ndarray | int]:
+        """Return (i, j, k) for a flat cell index."""
         idx = np.asarray(index)
         if np.any(idx < 0) or np.any(idx >= self.n_cells):
             raise ValueError("cell index outside grid")
-        i, j = idx % self.nx, idx // self.nx
+        layer = self.nx * self.ny
+        k, remainder = idx // layer, idx % layer
+        i, j = remainder % self.nx, remainder // self.nx
         if np.ndim(idx) == 0:
-            return int(i), int(j)
+            return int(i), int(j), int(k)
+        return i, j, k
+
+    def cell_ij(self, index: np.ndarray | int) -> Tuple[np.ndarray | int, np.ndarray | int]:
+        """Return the (i, j) coordinates, omitting the layer for compatibility."""
+        i, j, _ = self.cell_ijk(index)
         return i, j
 
     def pore_volume(self, porosity: np.ndarray | float) -> np.ndarray:
         """Return per-cell pore volume in bbl = Vb * phi / 5.615."""
         return np.asarray(pore_volume_bbl(self.bulk_volume, porosity), dtype=float)
 
-    def distance_to_cell(self, i: int, j: int) -> np.ndarray:
-        """Return the distance [ft] from every cell centre to the centre of cell (i, j)."""
-        c = self.cell_index(i, j)
-        return np.hypot(self.x_center - self.x_center[c], self.y_center - self.y_center[c])
+    def distance_to_cell(self, i: int, j: int, k: int = 0) -> np.ndarray:
+        """Return 3D distance [ft] from every cell to cell (i, j, k)."""
+        c = self.cell_index(i, j, k)
+        return np.sqrt((self.x_center - self.x_center[c]) ** 2
+                       + (self.y_center - self.y_center[c]) ** 2
+                       + (self.z_center - self.z_center[c]) ** 2)
 
     def neighbor_mean(self, field: np.ndarray) -> np.ndarray:
         """Return the mean of ``field`` over existing (non-boundary) neighbours.
@@ -146,8 +163,12 @@ class Grid:
         return np.where(count > 0, total / np.maximum(count, 1), values)
 
     def to_map(self, field: np.ndarray) -> np.ndarray:
-        """Reshape a flat (n_cells,) array into an (ny, nx) map."""
-        return np.asarray(field).reshape(self.ny, self.nx)
+        """Return a middle-layer (ny, nx) map from a flat cell field."""
+        return np.asarray(field).reshape(self.nz, self.ny, self.nx)[self.nz // 2]
+
+    def to_volume(self, field: np.ndarray) -> np.ndarray:
+        """Reshape a flat cell field into (nz, ny, nx)."""
+        return np.asarray(field).reshape(self.nz, self.ny, self.nx)
 
 
 def CartesianGrid(
@@ -162,47 +183,64 @@ def CartesianGrid(
     return build_grid(GridConfig(nx=nx, ny=ny, nz=nz, dx=dx, dy=dy, dz=dz))
 
 
-def build_grid(cfg: GridConfig) -> Grid:
-    """Construct a :class:`Grid` from a :class:`GridConfig`."""
+def build_grid(cfg: GridConfig, depth: np.ndarray | None = None) -> Grid:
+    """Construct a :class:`Grid` from a :class:`GridConfig`.
+
+    ``depth`` (flat, ft, positive down) overrides the flat-layer depth z_center.
+    """
     nx, ny, nz = int(cfg.nx), int(cfg.ny), int(cfg.nz)
-    if nz != 1:
-        raise ValueError("only nz == 1 (2D) grids are supported")
-    if nx < 1 or ny < 1:
-        raise ValueError("nx and ny must be >= 1")
+    if nx < 1 or ny < 1 or nz < 1:
+        raise ValueError("nx, ny, and nz must be >= 1")
     if min(cfg.dx, cfg.dy, cfg.dz) <= 0.0:
         raise ValueError("cell dimensions must be positive")
 
-    n = nx * ny
-    idx = np.arange(n, dtype=np.int64).reshape(ny, nx)
-    i_idx = (np.arange(n) % nx).astype(np.int64)
-    j_idx = (np.arange(n) // nx).astype(np.int64)
+    n = nx * ny * nz
+    idx = np.arange(n, dtype=np.int64).reshape(nz, ny, nx)
+    k_idx, j_idx, i_idx = np.indices((nz, ny, nx), dtype=np.int64)
+    i_idx, j_idx, k_idx = i_idx.ravel(), j_idx.ravel(), k_idx.ravel()
     x_center = (i_idx + 0.5) * cfg.dx
     y_center = (j_idx + 0.5) * cfg.dy
+    z_center = (k_idx + 0.5) * cfg.dz
     bulk = np.full(n, cfg.dx * cfg.dy * cfg.dz, dtype=float)
 
-    neighbors = -np.ones((n, 4), dtype=np.int64)
-    neighbors[idx[:, 1:].ravel(), WEST] = idx[:, :-1].ravel()
-    neighbors[idx[:, :-1].ravel(), EAST] = idx[:, 1:].ravel()
-    neighbors[idx[1:, :].ravel(), SOUTH] = idx[:-1, :].ravel()
-    neighbors[idx[:-1, :].ravel(), NORTH] = idx[1:, :].ravel()
+    neighbors = -np.ones((n, 6), dtype=np.int64)
+    neighbors[idx[:, :, 1:].ravel(), WEST] = idx[:, :, :-1].ravel()
+    neighbors[idx[:, :, :-1].ravel(), EAST] = idx[:, :, 1:].ravel()
+    neighbors[idx[:, 1:, :].ravel(), SOUTH] = idx[:, :-1, :].ravel()
+    neighbors[idx[:, :-1, :].ravel(), NORTH] = idx[:, 1:, :].ravel()
+    neighbors[idx[1:, :, :].ravel(), BOTTOM] = idx[:-1, :, :].ravel()
+    neighbors[idx[:-1, :, :].ravel(), TOP] = idx[1:, :, :].ravel()
 
-    xl, xr = idx[:, :-1].ravel(), idx[:, 1:].ravel()   # x-direction faces
-    yl, yr = idx[:-1, :].ravel(), idx[1:, :].ravel()   # y-direction faces
-    n_xf, n_yf = xl.size, yl.size
+    xl, xr = idx[:, :, :-1].ravel(), idx[:, :, 1:].ravel()
+    yl, yr = idx[:, :-1, :].ravel(), idx[:, 1:, :].ravel()
+    zl, zr = idx[:-1, :, :].ravel(), idx[1:, :, :].ravel()
+    n_xf, n_yf, n_zf = xl.size, yl.size, zl.size
 
-    face_left = np.concatenate([xl, yl]).astype(np.int64)
-    face_right = np.concatenate([xr, yr]).astype(np.int64)
-    face_dir = np.concatenate([np.zeros(n_xf, dtype=np.int64), np.ones(n_yf, dtype=np.int64)])
-    face_area = np.concatenate([np.full(n_xf, cfg.dy * cfg.dz), np.full(n_yf, cfg.dx * cfg.dz)])
-    face_length = np.concatenate([np.full(n_xf, cfg.dx), np.full(n_yf, cfg.dy)])
+    face_left = np.concatenate([xl, yl, zl]).astype(np.int64)
+    face_right = np.concatenate([xr, yr, zr]).astype(np.int64)
+    face_dir = np.concatenate([
+        np.zeros(n_xf, dtype=np.int64),
+        np.ones(n_yf, dtype=np.int64),
+        np.full(n_zf, 2, dtype=np.int64),
+    ])
+    face_area = np.concatenate([
+        np.full(n_xf, cfg.dy * cfg.dz),
+        np.full(n_yf, cfg.dx * cfg.dz),
+        np.full(n_zf, cfg.dx * cfg.dy),
+    ])
+    face_length = np.concatenate([
+        np.full(n_xf, cfg.dx), np.full(n_yf, cfg.dy), np.full(n_zf, cfg.dz),
+    ])
 
     return Grid(
         nx=nx, ny=ny, nz=nz, dx=float(cfg.dx), dy=float(cfg.dy), dz=float(cfg.dz),
-        n_cells=n, i_idx=i_idx, j_idx=j_idx, x_center=x_center, y_center=y_center,
+        n_cells=n, i_idx=i_idx, j_idx=j_idx, k_idx=k_idx,
+        x_center=x_center, y_center=y_center, z_center=z_center,
         bulk_volume=bulk, neighbors=neighbors,
         face_left=face_left, face_right=face_right, face_dir=face_dir,
         face_area=face_area, face_length=face_length,
         face_geom=face_area / face_length, n_xfaces=int(n_xf),
+        depth=z_center.copy() if depth is None else np.asarray(depth, dtype=float).ravel(),
     )
 
 
@@ -241,7 +279,9 @@ def main() -> None:
     print(f"grid {grid.nx} x {grid.ny} x {grid.nz}: {grid.n_cells} cells, "
           f"{grid.n_unknowns} unknowns, {grid.n_faces} faces ({grid.n_xfaces} in x)")
 
-    expected_faces = (grid.nx - 1) * grid.ny + grid.nx * (grid.ny - 1)
+    expected_faces = ((grid.nx - 1) * grid.ny * grid.nz
+                      + grid.nx * (grid.ny - 1) * grid.nz
+                      + grid.nx * grid.ny * (grid.nz - 1))
     assert grid.n_faces == expected_faces, "face count mismatch"
 
     # neighbour symmetry: if a's east neighbour is b, then b's west neighbour is a
@@ -266,11 +306,12 @@ def main() -> None:
     assert int(dof_index(c, IDX_SW)) == 3 * c + 1
 
     # geometry
-    assert np.isclose(grid.bulk_volume.sum(), grid.nx * grid.ny * cfg.grid.dx * cfg.grid.dy * cfg.grid.dz)
+    assert np.isclose(grid.bulk_volume.sum(),
+                      grid.nx * grid.ny * grid.nz * cfg.grid.dx * cfg.grid.dy * cfg.grid.dz)
     print(f"injector cell (2,2) -> index {c}; total pore volume at phi=0.18: "
           f"{grid.pore_volume(0.18).sum():.4e} bbl")
 
-    strip = build_grid(GridConfig(nx=10, ny=1))
+    strip = build_grid(GridConfig(nx=10, ny=1, nz=1))
     assert strip.n_faces == 9 and strip.n_xfaces == 9
     print("Grid self-checks: PASSED")
 

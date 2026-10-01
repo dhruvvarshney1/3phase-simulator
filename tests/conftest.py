@@ -34,8 +34,6 @@ def make_context(
     dz: float = 20.0,
     phi=0.18,
     k=100.0,
-    pvt=None,
-    relperm=None,
     wells=None,
     compressible: bool = False,
 ) -> ReservoirModel:

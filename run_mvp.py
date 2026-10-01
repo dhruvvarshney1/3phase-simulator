@@ -29,7 +29,7 @@ from typing import Any, Optional
 
 import numpy as np
 
-from config import default_config, smoke_test_config, override
+from config import default_config, smoke_test_config, synthetic_config, override
 from simulator import run_simulation
 from postprocess import generate_mvp_report
 
@@ -51,9 +51,9 @@ def build_arg_parser() -> argparse.ArgumentParser:
         description="Run the black-oil MVP waterflood simulation (README §12)."
     )
     parser.add_argument(
-        "--mode", choices=["mvp", "smoke"], default="mvp",
+        "--mode", choices=["mvp", "smoke", "synthetic"], default="synthetic",
         help="'mvp': full 30x30, 1000-day default run. "
-             "'smoke': fast 15x15, 200-day sanity-check run (README §12).",
+             "'smoke': fast 15x15, 200-day sanity-check run; 'synthetic': primary geological run from _initial_state_.py.",
     )
     parser.add_argument(
         "--init", choices=["previous", "rf"], default="previous",
@@ -81,7 +81,15 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="Override the config's default RNG seed (fractal field, RF, etc.).",
     )
     parser.add_argument(
+        "--days", type=float, default=None,
+        help="Simulate only this many days (e.g. 7 for a quick check).",
+    )
+    parser.add_argument(
         "--quiet", action="store_true", help="Suppress per-step progress logging.",
+    )
+    parser.add_argument(
+        "--live", action="store_true",
+        help="Show a live 3D water-saturation view while the simulation runs.",
     )
     return parser
 
@@ -90,13 +98,27 @@ def main(argv: Optional[list] = None) -> int:
     parser = build_arg_parser()
     args = parser.parse_args(argv)
 
-    cfg = default_config() if args.mode == "mvp" else smoke_test_config()
+    cfg = {"mvp": default_config, "smoke": smoke_test_config,
+           "synthetic": synthetic_config}[args.mode]()
+
+    if args.days is not None:
+        ts = cfg.timestep
+        stages = tuple((t0, min(t1, args.days), a, b) for t0, t1, a, b in ts.stages if t0 < args.days)
+        cfg = override(cfg, "timestep", t_end=args.days, stages=stages,
+                       report_times=tuple(t for t in ts.report_times if t < args.days) + (args.days,))
 
     seed = args.seed if args.seed is not None else getattr(cfg, "seed", 42)
     cfg = override(cfg, "fractal", seed=seed)
     rng = np.random.default_rng(seed)  # noqa: F841  (kept for provenance / future use)
 
     outdir = args.outdir or f"results/mvp_{args.mode}_{args.init}"
+
+    model = x0 = None
+    if args.mode == "synthetic":
+        from initial_state_model import build_from_initial_state
+
+        model, x0 = build_from_initial_state(cfg=cfg)
+        cfg = model.cfg
 
     rf_model = None
     if args.init == "rf":
@@ -112,6 +134,14 @@ def main(argv: Optional[list] = None) -> int:
             )
             return 1
 
+    live_viewer = None
+    if args.live:
+        from live_visualization import LiveSimulationViewer
+
+        live_viewer = LiveSimulationViewer(
+            model if model is not None else __import__("residual").build_model(cfg)
+        )
+
     print(f"[run_mvp] mode={args.mode} init={args.init} jacobian={args.jacobian} seed={seed}")
     t_start = time.perf_counter()
 
@@ -121,6 +151,8 @@ def main(argv: Optional[list] = None) -> int:
         rf_model=rf_model,
         jacobian_method=args.jacobian,
         verbose=not args.quiet,
+        live_callback=live_viewer.update if live_viewer is not None else None,
+        model=model, x0=x0,
     )
 
     wall_time = time.perf_counter() - t_start
@@ -152,6 +184,8 @@ def main(argv: Optional[list] = None) -> int:
             )
 
     print(f"[run_mvp] All outputs written to: {outdir}")
+    if live_viewer is not None:
+        live_viewer.close()
     return 0
 
 

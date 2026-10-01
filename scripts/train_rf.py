@@ -7,17 +7,18 @@ import json
 from pathlib import Path
 
 import numpy as np
-from sklearn.model_selection import train_test_split
+from sklearn.model_selection import GroupShuffleSplit
 from sklearn.metrics import mean_absolute_error, mean_squared_error
 
-from rf_surrogate import RFSurrogate, load_dataset
+from rf_surrogate import RFSurrogate, load_dataset_with_groups
 
 
 def train(dataset: str, output_dir: str, estimators: int = 200, max_depth: int = 20) -> dict:
-    features, targets = load_dataset(dataset)
-    x_train, x_test, y_train, y_test = train_test_split(
-        features, targets, test_size=0.2, random_state=42
-    )
+    features, targets, groups = load_dataset_with_groups(dataset)
+    split = GroupShuffleSplit(n_splits=1, test_size=0.2, random_state=42)
+    train_idx, test_idx = next(split.split(features, targets, groups))
+    x_train, x_test = features[train_idx], features[test_idx]
+    y_train, y_test = targets[train_idx], targets[test_idx]
     surrogate = RFSurrogate.fit(
         x_train, y_train, n_estimators=estimators, max_depth=max_depth
     )

@@ -1,0 +1,204 @@
+{
+  "synthetic_warning": "SYNTHETIC - NOT A REAL FIELD. Illustrative ranges.",
+  "seed": 42,
+  "grid": {
+    "Nx": 40,
+    "Ny": 40,
+    "Nz": 10,
+    "Lx": 1000.0,
+    "Ly": 1000.0,
+    "Lz": 50.0,
+    "dx": 25.0,
+    "dy": 25.0,
+    "dz": 5.0,
+    "top_depth_m": 2500.0
+  },
+  "units": {
+    "length": "m",
+    "porosity": "fraction",
+    "permeability": "mD, 1mD=9.869233e-16m2",
+    "pressure": "Pa",
+    "saturation": "fraction"
+  },
+  "facies_definitions": {
+    "0": "Mudstone/Wackestone",
+    "1": "Packstone",
+    "2": "Grainstone",
+    "3": "Boundstone/Reef",
+    "4": "Dolomitized",
+    "5": "Evaporite/Anhydrite"
+  },
+  "pore_definitions": {
+    "0": "Interparticle",
+    "1": "Intraparticle",
+    "2": "Moldic",
+    "3": "Vuggy",
+    "4": "Microporosity",
+    "5": "Fracture"
+  },
+  "OWC_m": 2535.0,
+  "reference_pressure_Pa": 25000000.0,
+  "reference_depth_m": 2500.0,
+  "formation_compressibility_1Pa": 7e-10,
+  "relperm_params": {
+    "type": "Corey-carbonate-illustrative",
+    "Sor_avg": 0.342,
+    "krw_max": 0.6,
+    "kro_max": 0.9,
+    "nw": 3.5,
+    "no": 2.5
+  },
+  "capillary_params": {
+    "type": "Brooks-Corey-illustrative",
+    "lambda": 2.0
+  },
+  "faults": [
+    {
+      "name": "F-01",
+      "type": "normal",
+      "x0": 650.0,
+      "dip_deg": 70.0,
+      "strike": "N-S",
+      "amplitude": 30.0,
+      "trans_south": 0.05,
+      "trans_north": 2.0,
+      "equation": "x_f(y,z)=x0+(z-ztop)*cot(dip)+A*sin(2*pi*y/Ly)"
+    }
+  ],
+  "fractures": [
+    {
+      "name": "FC-01",
+      "center": [
+        300,
+        650
+      ],
+      "azimuth_deg": 30,
+      "length": 600,
+      "width": 25,
+      "z_top": 2510,
+      "z_bottom": 2540,
+      "perm_mult": 500,
+      "phi_add": 0.004,
+      "aperture_mm": 2.0,
+      "p0": [
+        150.00000000000003,
+        390.1923788646684
+      ],
+      "p1": [
+        450.0,
+        909.8076211353316
+      ]
+    },
+    {
+      "name": "FC-02",
+      "center": [
+        650,
+        350
+      ],
+      "azimuth_deg": 120,
+      "length": 450,
+      "width": 25,
+      "z_top": 2505,
+      "z_bottom": 2535,
+      "perm_mult": 300,
+      "phi_add": 0.003,
+      "aperture_mm": 1.5,
+      "p0": [
+        455.1442841485013,
+        462.49999999999994
+      ],
+      "p1": [
+        844.8557158514986,
+        237.50000000000006
+      ]
+    },
+    {
+      "name": "FC-03",
+      "center": [
+        500,
+        500
+      ],
+      "azimuth_deg": 75,
+      "length": 350,
+      "width": 50,
+      "z_top": 2520,
+      "z_bottom": 2550,
+      "perm_mult": 800,
+      "phi_add": 0.005,
+      "aperture_mm": 3.0,
+      "p0": [
+        330.962980399413,
+        454.7066671070589
+      ],
+      "p1": [
+        669.037019600587,
+        545.2933328929412
+      ]
+    }
+  ],
+  "dpdp": {
+    "enabled": false,
+    "fracture_model": "equivalent-continuum, NOT DFM"
+  },
+  "honesty_notes": [
+    "Diagenesis-facies interaction poorly understood.",
+    "Carbonate ranges wider than sandstone, basin-dependent.",
+    "Equivalent continuum is numerical simplification."
+  ],
+  "wells": [
+    {
+      "name": "PROD-01",
+      "type": "producer",
+      "ij": [
+        24,
+        25
+      ],
+      "x": 612.5,
+      "y": 637.5,
+      "perforations": [
+        0,
+        1,
+        2
+      ],
+      "perforation_depths": [
+        2502.5,
+        2507.5,
+        2512.5
+      ],
+      "control": {
+        "mode": "BHP",
+        "BHP_bar": 150.0,
+        "oil_rate_limit_m3day": 200.0
+      },
+      "radius_m": 0.1,
+      "skin": 0.0
+    },
+    {
+      "name": "INJ-01",
+      "type": "injector",
+      "ij": [
+        20,
+        17
+      ],
+      "x": 512.5,
+      "y": 437.5,
+      "perforations": [
+        1,
+        2,
+        3
+      ],
+      "perforation_depths": [
+        2507.5,
+        2512.5,
+        2517.5
+      ],
+      "control": {
+        "mode": "RATE",
+        "water_rate_m3day": 300.0,
+        "BHP_limit_bar": 320.0
+      },
+      "radius_m": 0.1,
+      "skin": 0.0
+    }
+  ]
+}

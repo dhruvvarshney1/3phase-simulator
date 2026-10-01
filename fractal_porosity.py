@@ -47,38 +47,98 @@ def beta_from_fractal_dimension(d_f: float) -> float:
     return 8.0 - 2.0 * float(d_f)
 
 
-def generate_fbm_field(nx: int, ny: int, beta: float, seed: int) -> np.ndarray:
-    """Return an (ny, nx) fBm field with zero mean and unit standard deviation.
+def generate_fbm_field(
+    nx: int,
+    ny: int,
+    beta: float,
+    seed: int,
+    nz: int = 1,
+) -> np.ndarray:
+    """Return an (ny, nx) or (nz, ny, nx) fBm field.
 
-    Row index is j (y), column index is i (x), so ``field.ravel()`` is
-    ordered by ``cell_index(i, j) = j*nx + i``. A degenerate field
-    (e.g. 1x1 grid) is returned as zeros.
+    Row index is j (y), column index is i (x), so field.ravel()
+    follows cell_index(i, j, k) = k*ny*nx + j*nx + i.
     """
+
     if nx < 1 or ny < 1:
         raise ValueError("nx and ny must be >= 1")
     if beta <= 0.0:
         raise ValueError("beta must be positive")
+    if nz < 1:
+        raise ValueError("nz must be >= 1")
+
     rng = np.random.default_rng(seed)
-    noise = rng.standard_normal((ny, nx)) + 1j * rng.standard_normal((ny, nx))
 
-    kx = np.fft.fftfreq(nx)[None, :]
-    ky = np.fft.fftfreq(ny)[:, None]
-    k = np.hypot(kx, ky)
+    shape = (ny, nx) if nz == 1 else (nz, ny, nx)
+
+    # Complex Gaussian white noise
+    noise = (
+        rng.standard_normal(shape)
+        + 1j * rng.standard_normal(shape)
+    )
+
+    # --------------------------------------------------------
+    # Fourier frequencies
+    # --------------------------------------------------------
+
+    if nz == 1:
+
+        kx = np.fft.fftfreq(nx)[None, :]
+        ky = np.fft.fftfreq(ny)[:, None]
+
+        k = np.hypot(kx, ky)
+
+    else:
+
+        kz = np.fft.fftfreq(nz)[:, None, None]
+        ky = np.fft.fftfreq(ny)[None, :, None]
+        kx = np.fft.fftfreq(nx)[None, None, :]
+
+        k = np.sqrt(
+            kx**2 +
+            ky**2 +
+            kz**2
+        )
+
+    # --------------------------------------------------------
+    # Spectral amplitude filter
+    # --------------------------------------------------------
+
     amplitude = np.zeros_like(k)
-    nonzero = k > 0.0
-    amplitude[nonzero] = k[nonzero] ** (-beta / 2.0)
 
-    field = np.real(np.fft.ifft2(noise * amplitude))
-    field = field - field.mean()
+    nonzero = k > 0.0
+
+    amplitude[nonzero] = (
+        k[nonzero] ** (-beta / 2.0)
+    )
+
+    # --------------------------------------------------------
+    # Inverse FFT
+    # --------------------------------------------------------
+
+    if nz == 1:
+        field = np.real(
+            np.fft.ifft2(noise * amplitude)
+        )
+    else:
+        field = np.real(
+            np.fft.ifftn(noise * amplitude)
+        )
+
+    # Normalize
+    field -= field.mean()
+
     std = field.std()
+
     if std <= 0.0:
-        return np.zeros((ny, nx))
+        return np.zeros(shape)
+
     return field / std
 
 
-def generate_porosity(nx: int, ny: int, cfg: FractalConfig) -> np.ndarray:
-    """Return an (ny, nx) porosity map from a :class:`FractalConfig`."""
-    field = generate_fbm_field(nx, ny, cfg.beta, cfg.seed)
+def generate_porosity(nx: int, ny: int, cfg: FractalConfig, nz: int = 1) -> np.ndarray:
+    """Return an (ny, nx) or (nz, ny, nx) porosity field."""
+    field = generate_fbm_field(nx, ny, cfg.beta, cfg.seed, nz=nz)
     phi = cfg.phi_mean + cfg.phi_std * field
     return np.clip(phi, cfg.phi_min, cfg.phi_max)
 
@@ -131,6 +191,30 @@ def main() -> None:
 
     assert np.isclose(beta_from_fractal_dimension(fractal_dimension(3.0)), 3.0)
     print("Fractal porosity self-checks: PASSED")
+
+        # 3D field check
+    phi_3d = generate_porosity(
+        10,
+        8,
+        FractalConfig(beta=3.0, seed=42),
+        nz=3,
+    )
+
+    assert phi_3d.shape == (3, 8, 10)
+    assert np.all(phi_3d >= base.phi_min)
+    assert np.all(phi_3d <= base.phi_max)
+
+    phi_3d_repeat = generate_porosity(
+        10,
+        8,
+        FractalConfig(beta=3.0, seed=42),
+        nz=3,
+    )
+
+    assert np.array_equal(
+        phi_3d,
+        phi_3d_repeat
+    ), "3D field is not reproducible"
 
 
 if __name__ == "__main__":

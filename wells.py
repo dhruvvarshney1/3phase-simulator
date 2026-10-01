@@ -17,7 +17,8 @@ which reduces to 0.14*sqrt(dx^2+dy^2) when kx = ky.
 
 Producer (BHP control, Eq. 6.2)
 -------------------------------
-With drawdown dd = max(p_i - p_bh, 0) (flow reversal into the producer is clamped):
+Per perforation k, with drawdown dd = max(p_k - (p_bh + head_k), 0)
+(flow reversal into the producer is clamped):
 
     q_w = WI * lambda_w * dd                  [STB/day]
     q_o = WI * lambda_o * dd                  [STB/day]
@@ -84,30 +85,67 @@ def peaceman_well_index(kx: float, ky: float, dz: float, r_e: float, r_w: float,
 
 @dataclass(frozen=True, eq=False)
 class Wells:
-    """Static well data: locations, well indices and controls."""
+    """Static well data: perforated cells, per-perforation well indices and controls.
 
-    producer_cell: int
-    injector_cell: int
-    wi_producer: float
-    wi_injector: float
+    A well may be completed in several cells (vertical well through several
+    layers). The BHP datum is the shallowest perforation; the wellbore pressure
+    at perforation k is p_bh + head_k with a static wellbore head
+    head_k = gamma * (D_k - D_datum) (gamma_o for the producer, gamma_w for the
+    injector; zero when gravity is off).
+
+    The injector rate is split between perforations in proportion to WI_k
+    (k*h allocation).
+    """
+
+    producer_cells: np.ndarray   # (n_perf_prod,) int
+    injector_cells: np.ndarray   # (n_perf_inj,) int
+    wi_prod: np.ndarray          # (n_perf_prod,) [bbl*cp/(day*psi)]
+    wi_inj: np.ndarray           # (n_perf_inj,)
+    prod_head: np.ndarray        # (n_perf_prod,) psi
+    inj_head: np.ndarray         # (n_perf_inj,) psi
     r_e: float
-    producer_bhp: float          # psi
+    producer_bhp: float          # psi at the datum
     injector_rate: float         # STB/day water
     no_backflow: bool
+
+    # ponytail: kh-weighted injector allocation; add p_bh,inj as an unknown
+    # with a rate constraint if mobility-weighted allocation matters.
+    @property
+    def inj_frac(self) -> np.ndarray:
+        return self.wi_inj / self.wi_inj.sum()
+
+    # single-cell views kept for diagnostics / legacy callers (first = datum perforation)
+    @property
+    def producer_cell(self) -> int:
+        return int(self.producer_cells[0])
+
+    @property
+    def injector_cell(self) -> int:
+        return int(self.injector_cells[0])
+
+    @property
+    def wi_producer(self) -> float:
+        return float(self.wi_prod.sum())
+
+    @property
+    def wi_injector(self) -> float:
+        return float(self.wi_inj.sum())
 
 
 @dataclass(frozen=True)
 class ProducerRates:
     """Producer surface rates (positive = production) and their derivatives.
 
-    ``jac`` is a (3, 3) array: rows = (water, oil, total gas), columns =
-    derivatives with respect to the producer-cell unknowns (p, S_w, S_g).
+    ``q`` is (n_perf, 3): per-perforation (water, oil, total gas) rates.
+    ``jac`` is (n_perf, 3, 3): d q[k, eq] / d (p, S_w, S_g) of perforation cell k.
+    The scalar fields are well totals.
     """
 
     q_w: float
     q_o: float
     q_g_free: float
     q_g_total: float
+    q: np.ndarray
     jac: np.ndarray
 
 
@@ -115,13 +153,13 @@ class ProducerRates:
 class WellTerms:
     """Net source terms Q (positive = injection) of both wells.
 
-    ``q_prod`` = (-q_w, -q_o, -q_g_total) at the producer cell with
-    ``dq_prod`` its (3, 3) derivative w.r.t. (p, S_w, S_g) of that cell.
-    ``q_inj`` = (rate, 0, 0) at the injector cell (constant, no derivatives).
+    ``q_prod`` (n_perf_prod, 3) = -(q_w, q_o, q_g_total) per producer perforation,
+    ``dq_prod`` its (n_perf_prod, 3, 3) derivative w.r.t. that cell's (p, S_w, S_g).
+    ``q_inj`` (n_perf_inj, 3) = (rate share, 0, 0) (constant, no derivatives).
     """
 
-    producer_cell: int
-    injector_cell: int
+    producer_cells: np.ndarray
+    injector_cells: np.ndarray
     q_prod: np.ndarray
     dq_prod: np.ndarray
     q_inj: np.ndarray
@@ -129,97 +167,108 @@ class WellTerms:
 
 
 def build_wells(cfg: SimulationConfig, grid: Grid, rock: Rock) -> Wells:
-    """Construct the :class:`Wells` for a configuration, grid and rock."""
+    """Construct single-perforation :class:`Wells` from ``cfg.wells`` (legacy MVP setup)."""
     wc = cfg.wells
-    pi, pj = wc.producer_cell(grid.nx, grid.ny)
-    ii, ij = wc.injector_ij
-    prod = int(grid.cell_index(pi, pj))
-    inj = int(grid.cell_index(ii, ij))
+    pi, pj, pk = wc.producer_cell(grid.nx, grid.ny, grid.nz)
+    ii, ij, ik = wc.injector_cell(grid.nz)
+    prod = int(grid.cell_index(pi, pj, pk))
+    inj = int(grid.cell_index(ii, ij, ik))
     if prod == inj:
         raise ValueError("producer and injector must be in different cells")
     r_e = peaceman_re_isotropic(grid.dx, grid.dy, wc.r_e_factor)
+
+    def wi(c: int) -> float:
+        return peaceman_well_index(rock.perm[c], rock.perm[c], grid.dz, r_e, wc.r_w, wc.skin)
+
     return Wells(
-        producer_cell=prod, injector_cell=inj,
-        wi_producer=peaceman_well_index(rock.perm[prod], rock.perm[prod], grid.dz, r_e,
-                                        wc.r_w, wc.skin),
-        wi_injector=peaceman_well_index(rock.perm[inj], rock.perm[inj], grid.dz, r_e,
-                                        wc.r_w, wc.skin),
+        producer_cells=np.array([prod]), injector_cells=np.array([inj]),
+        wi_prod=np.array([wi(prod)]), wi_inj=np.array([wi(inj)]),
+        prod_head=np.zeros(1), inj_head=np.zeros(1),
         r_e=r_e, producer_bhp=float(wc.producer_bhp), injector_rate=float(wc.injector_rate),
         no_backflow=bool(wc.producer_no_backflow),
     )
 
 
-def producer_rates(wells: Wells, pvt: PVT, relperm: RelPerm,
-                   p: float, sw: float, sg: float) -> ProducerRates:
-    """Return producer surface rates and derivatives at cell state (p, S_w, S_g)."""
-    pa, swa, sga = np.array(p, dtype=float), np.array(sw, dtype=float), np.array(sg, dtype=float)
+def _perf_arrays(n: int, *values):
+    return [np.broadcast_to(np.asarray(v, dtype=float), (n,)) for v in values]
+
+
+def producer_rates(wells: Wells, pvt: PVT, relperm: RelPerm, p, sw, sg) -> ProducerRates:
+    """Return producer rates and derivatives at the perforation-cell states.
+
+    ``p, sw, sg`` are arrays over ``wells.producer_cells`` (scalars allowed for
+    a single perforation).
+    """
+    n = wells.producer_cells.size
+    pa, swa, sga = _perf_arrays(n, p, sw, sg)
     props = pvt.evaluate(pa)
-    kr = relperm.evaluate(swa, sga)
+    kr = relperm.evaluate(swa, sga, cells=wells.producer_cells)
 
-    raw_dd = float(pa) - wells.producer_bhp
+    raw_dd = pa - (wells.producer_bhp + wells.prod_head)
     if wells.no_backflow:
-        dd = max(raw_dd, 0.0)
-        d_dd = 1.0 if raw_dd > 0.0 else 0.0
+        dd = np.maximum(raw_dd, 0.0)
+        d_dd = (raw_dd > 0.0).astype(float)
     else:
-        dd, d_dd = raw_dd, 1.0
+        dd, d_dd = raw_dd, np.ones(n)
 
-    bw, bo, bg = float(props.bw), float(props.bo), float(props.bg)
-    muw, muo, mug = float(props.mu_w), float(props.mu_o), float(props.mu_g)
-    rs, drs = float(props.rs), float(props.drs_dp)
-
-    lam_w, lam_o, lam_g = float(kr.krw) / (muw * bw), float(kr.kro) / (muo * bo), \
-        float(kr.krg) / (mug * bg)
+    bw, bo, bg = props.bw, props.bo, props.bg
+    muw, muo, mug = props.mu_w, props.mu_o, props.mu_g
+    lam_w, lam_o, lam_g = kr.krw / (muw * bw), kr.kro / (muo * bo), kr.krg / (mug * bg)
 
     # derivatives of mobilities: columns (p, S_w, S_g)
-    dlam_w = np.array([-lam_w * float(props.dbw_dp) / bw,
-                       float(kr.dkrw_dsw) / (muw * bw), float(kr.dkrw_dsg) / (muw * bw)])
-    dlam_o = np.array([-lam_o * (float(props.dmu_o_dp) / muo + float(props.dbo_dp) / bo),
-                       float(kr.dkro_dsw) / (muo * bo), float(kr.dkro_dsg) / (muo * bo)])
-    dlam_g = np.array([-lam_g * float(props.dbg_dp) / bg,
-                       float(kr.dkrg_dsw) / (mug * bg), float(kr.dkrg_dsg) / (mug * bg)])
+    dlam_w = np.column_stack([-lam_w * props.dbw_dp / bw,
+                              kr.dkrw_dsw / (muw * bw), kr.dkrw_dsg / (muw * bw)])
+    dlam_o = np.column_stack([-lam_o * (props.dmu_o_dp / muo + props.dbo_dp / bo),
+                              kr.dkro_dsw / (muo * bo), kr.dkro_dsg / (muo * bo)])
+    dlam_g = np.column_stack([-lam_g * props.dbg_dp / bg,
+                              kr.dkrg_dsw / (mug * bg), kr.dkrg_dsg / (mug * bg)])
 
-    wi = wells.wi_producer
-    ddd = np.array([d_dd, 0.0, 0.0])           # d(dd)/d(p, S_w, S_g)
+    wi = wells.wi_prod
+    ddd = np.zeros((n, 3))
+    ddd[:, 0] = d_dd                                   # d(dd)/d(p, S_w, S_g)
     q_w, q_o, q_gf = wi * lam_w * dd, wi * lam_o * dd, wi * lam_g * dd
-    dq_w = wi * (dlam_w * dd + lam_w * ddd)
-    dq_o = wi * (dlam_o * dd + lam_o * ddd)
-    dq_gf = wi * (dlam_g * dd + lam_g * ddd)
+    dq_w = wi[:, None] * (dlam_w * dd[:, None] + lam_w[:, None] * ddd)
+    dq_o = wi[:, None] * (dlam_o * dd[:, None] + lam_o[:, None] * ddd)
+    dq_gf = wi[:, None] * (dlam_g * dd[:, None] + lam_g[:, None] * ddd)
 
-    q_gt = q_gf + rs * q_o
-    dq_gt = dq_gf + rs * dq_o + np.array([drs * q_o, 0.0, 0.0])
+    q_gt = q_gf + props.rs * q_o
+    dq_gt = dq_gf + props.rs[:, None] * dq_o
+    dq_gt[:, 0] += props.drs_dp * q_o
 
-    return ProducerRates(q_w=q_w, q_o=q_o, q_g_free=q_gf, q_g_total=q_gt,
-                         jac=np.vstack([dq_w, dq_o, dq_gt]))
+    return ProducerRates(q_w=float(q_w.sum()), q_o=float(q_o.sum()), q_g_free=float(q_gf.sum()),
+                         q_g_total=float(q_gt.sum()), q=np.column_stack([q_w, q_o, q_gt]),
+                         jac=np.stack([dq_w, dq_o, dq_gt], axis=1))
 
 
 def well_terms(wells: Wells, pvt: PVT, relperm: RelPerm,
                p: np.ndarray, sw: np.ndarray, sg: np.ndarray) -> WellTerms:
     """Return the net well source terms for the current global state."""
-    c = wells.producer_cell
-    rates = producer_rates(wells, pvt, relperm, float(p[c]), float(sw[c]), float(sg[c]))
+    c = wells.producer_cells
+    rates = producer_rates(wells, pvt, relperm, p[c], sw[c], sg[c])
+    q_inj = np.zeros((wells.injector_cells.size, 3))
+    q_inj[:, 0] = wells.injector_rate * wells.inj_frac
     return WellTerms(
-        producer_cell=c, injector_cell=wells.injector_cell,
-        q_prod=-np.array([rates.q_w, rates.q_o, rates.q_g_total]),
-        dq_prod=-rates.jac,
-        q_inj=np.array([wells.injector_rate, 0.0, 0.0]),
-        rates=rates,
+        producer_cells=c, injector_cells=wells.injector_cells,
+        q_prod=-rates.q, dq_prod=-rates.jac, q_inj=q_inj, rates=rates,
     )
 
 
-def injector_bhp(wells: Wells, pvt: PVT, relperm: RelPerm,
-                 p: float, sw: float, sg: float) -> float:
-    """Return the diagnostic injector bottom-hole pressure [psi].
+def injector_bhp(wells: Wells, pvt: PVT, relperm: RelPerm, p, sw, sg) -> float:
+    """Return the diagnostic injector bottom-hole pressure at the datum [psi].
 
-    p_bh = p_i + q_inj * B_w / (WI * lambda_t,vol) with the total volumetric
-    mobility lambda_t,vol = k_rw/mu_w + k_ro/mu_o + k_rg/mu_g of the cell.
+    Per perforation p_bh = p_k + q_k * B_w / (WI_k * lambda_t,vol) - head_k with
+    lambda_t,vol = k_rw/mu_w + k_ro/mu_o + k_rg/mu_g; the largest (controlling)
+    value is returned. ``p, sw, sg`` are arrays over ``wells.injector_cells``.
     """
-    props = pvt.evaluate(np.array(p, dtype=float))
-    kr = relperm.evaluate(np.array(sw, dtype=float), np.array(sg, dtype=float))
-    lam_t = float(kr.krw) / float(props.mu_w) + float(kr.kro) / float(props.mu_o) \
-        + float(kr.krg) / float(props.mu_g)
-    if lam_t <= 0.0:
-        raise ValueError("total mobility is zero at the injector cell")
-    return float(p) + wells.injector_rate * float(props.bw) / (wells.wi_injector * lam_t)
+    n = wells.injector_cells.size
+    pa, swa, sga = _perf_arrays(n, p, sw, sg)
+    props = pvt.evaluate(pa)
+    kr = relperm.evaluate(swa, sga, cells=wells.injector_cells)
+    lam_t = kr.krw / props.mu_w + kr.kro / props.mu_o + kr.krg / props.mu_g
+    if np.any(lam_t <= 0.0):
+        raise ValueError("total mobility is zero at an injector perforation")
+    q = wells.injector_rate * wells.inj_frac
+    return float(np.max(pa + q * props.bw / (wells.wi_inj * lam_t) - wells.inj_head))
 
 
 def main() -> None:
@@ -237,7 +286,7 @@ def main() -> None:
     print(f"r_e = {wells.r_e:.4f} ft, WI = {wells.wi_producer:.4f} bbl*cp/(day*psi); "
           f"producer cell {wells.producer_cell}, injector cell {wells.injector_cell}")
     assert math.isclose(peaceman_re_anisotropic(50.0, 50.0, 100.0, 100.0), r_e, rel_tol=1e-12)
-    assert wells.producer_cell == grid.cell_index(27, 27) and wells.injector_cell == grid.cell_index(2, 2)
+    assert wells.producer_cell == grid.cell_index(27, 27, cfg.wells.producer_k) and wells.injector_cell == grid.cell_index(2, 2, cfg.wells.injector_k)
 
     # rates, dissolved gas, derivatives against central differences
     for (p, sw, sg) in [(3000.0, 0.45, 0.0), (2000.0, 0.40, 0.08), (1800.0, 0.30, 0.15)]:
@@ -253,7 +302,7 @@ def main() -> None:
             ru, rd = producer_rates(wells, pvt, rp, *up), producer_rates(wells, pvt, rp, *dn)
             fd = np.array([ru.q_w - rd.q_w, ru.q_o - rd.q_o, ru.q_g_total - rd.q_g_total]) \
                 / (2.0 * steps[col])
-            an = r.jac[:, col]
+            an = r.jac[0][:, col]
             err = np.max(np.abs(fd - an) / (np.abs(an) + 1e-8))
             assert err < 1e-5, f"producer derivative mismatch (col {col}): {err:.2e}"
         print(f"p={p:>6.0f} Sw={sw:.2f} Sg={sg:.2f}: qw={r.q_w:9.3f} qo={r.q_o:9.3f} STB/d, "
@@ -267,7 +316,7 @@ def main() -> None:
     # net well terms and sign convention
     n = grid.n_cells
     terms = well_terms(wells, pvt, rp, np.full(n, 3000.0), np.full(n, 0.4), np.zeros(n))
-    assert np.all(terms.q_prod[:3] <= 0.0) and terms.q_inj[0] == cfg.wells.injector_rate
+    assert np.all(terms.q_prod <= 0.0) and terms.q_inj[0, 0] == cfg.wells.injector_rate
 
     # diagnostic injector BHP exceeds the cell pressure
     bhp = injector_bhp(wells, pvt, rp, 4000.0, 0.25, 0.0)

@@ -20,9 +20,11 @@ SCF/day):
     lambda_a = k_ra / (mu_a * B_a)
 
 The upstream cell is the left cell when p_left >= p_right, otherwise the right
-cell. Because P_c = 0 and gravity is neglected, all phases share the same
-potential difference and therefore the same upstream cell. (With capillary
-pressure or gravity each phase would need its own upstream selection.)
+cell. ``select_upstream`` does this for a single potential. With gravity
+(``residual.py``) each phase has its own potential
+    dPhi_a = (p_left - p_right) - gamma_a * (D_left - D_right)
+and therefore its own upstream cell; ``select_upstream`` is then called once
+per phase with the phase potential.
 """
 
 from __future__ import annotations
@@ -44,19 +46,26 @@ def harmonic_mean(a: np.ndarray, b: np.ndarray) -> np.ndarray:
     return 2.0 * a_arr * b_arr / (a_arr + b_arr)
 
 
-def face_transmissibility(grid: Grid, perm: np.ndarray) -> np.ndarray:
+def face_transmissibility(grid: Grid, perm: np.ndarray,
+                          mult: np.ndarray | None = None) -> np.ndarray:
     """Return T_ij [bbl*cp/(day*psi)] for every interior face.
 
     Parameters
     ----------
     grid : grid with face connectivity and geometric factors A/L.
-    perm : (n_cells,) isotropic cell permeability [md].
+    perm : (n_cells,) isotropic or (n_cells, 3) directional (kx, ky, kz) permeability [md];
+        each face uses the component along its own direction (TPFA, diagonal tensor).
+    mult : optional (n_faces,) transmissibility multipliers (e.g. faults), in (0, 1].
     """
     perm = np.asarray(perm, dtype=float)
-    if perm.shape != (grid.n_cells,):
-        raise ValueError("perm must have one value per cell")
-    k_face = harmonic_mean(perm[grid.face_left], perm[grid.face_right])
-    return DARCY_BBL_PER_DAY * k_face * grid.face_geom
+    if perm.shape == (grid.n_cells,):
+        k_l, k_r = perm[grid.face_left], perm[grid.face_right]
+    elif perm.shape == (grid.n_cells, 3):
+        k_l, k_r = perm[grid.face_left, grid.face_dir], perm[grid.face_right, grid.face_dir]
+    else:
+        raise ValueError("perm must have shape (n_cells,) or (n_cells, 3)")
+    T = DARCY_BBL_PER_DAY * harmonic_mean(k_l, k_r) * grid.face_geom
+    return T if mult is None else T * np.asarray(mult, dtype=float)
 
 
 @dataclass(frozen=True, eq=False)
@@ -77,13 +86,15 @@ class FaceUpstream:
     down: np.ndarray
 
 
-def select_upstream(grid: Grid, p: np.ndarray) -> FaceUpstream:
-    """Choose the upstream cell of every face from the pressure field.
+def select_upstream(grid: Grid, p: np.ndarray, gravity: np.ndarray | float = 0.0) -> FaceUpstream:
+    """Choose the upstream cell of every face from the phase potential.
 
-    Ties (dp == 0) select the left cell; the flux is zero there anyway.
+    ``gravity`` is gamma_a * (D_left - D_right) [psi] per face, so ``dp`` is the
+    potential difference dPhi_a. Ties (dp == 0) select the left cell; the flux
+    is zero there anyway.
     """
     p = np.asarray(p, dtype=float)
-    dp = p[grid.face_left] - p[grid.face_right]
+    dp = p[grid.face_left] - p[grid.face_right] - gravity
     left_is_up = dp >= 0.0
     up = np.where(left_is_up, grid.face_left, grid.face_right)
     down = np.where(left_is_up, grid.face_right, grid.face_left)
@@ -95,15 +106,72 @@ def main() -> None:
     cfg = default_config()
     grid = build_grid(cfg.grid)
 
-    # uniform permeability: T = 0.001127 * k * A / L
+    # ------------------------------------------------------------
+    # Uniform permeability
+    # ------------------------------------------------------------
+
     k0 = 100.0
-    T = face_transmissibility(grid, np.full(grid.n_cells, k0))
-    expected_x = 0.001127 * k0 * (cfg.grid.dy * cfg.grid.dz) / cfg.grid.dx
-    assert np.allclose(T, expected_x), "uniform-k transmissibility mismatch"
-    print(f"uniform k = {k0} md -> T = {T[0]:.6f} bbl*cp/(day*psi) on all {T.size} faces")
+
+    T = face_transmissibility(
+        grid,
+        np.full(grid.n_cells, k0)
+    )
+
+    # Expected transmissibility by face direction
+    expected_x = (
+        0.001127
+        * k0
+        * (cfg.grid.dy * cfg.grid.dz)
+        / cfg.grid.dx
+    )
+
+    expected_y = (
+        0.001127
+        * k0
+        * (cfg.grid.dx * cfg.grid.dz)
+        / cfg.grid.dy
+    )
+
+    expected_z = (
+        0.001127
+        * k0
+        * (cfg.grid.dx * cfg.grid.dy)
+        / cfg.grid.dz
+    )
+
+    # X faces
+    x_faces = grid.face_dir == 0
+
+    assert np.allclose(
+        T[x_faces],
+        expected_x
+    ), "x-face transmissibility mismatch"
+
+    # Y faces
+    y_faces = grid.face_dir == 1
+
+    assert np.allclose(
+        T[y_faces],
+        expected_y
+    ), "y-face transmissibility mismatch"
+
+    # Z faces
+    z_faces = grid.face_dir == 2
+
+    assert np.allclose(
+        T[z_faces],
+        expected_z
+    ), "z-face transmissibility mismatch"
+
+    print(
+        f"uniform k = {k0} md | "
+        f"Tx = {expected_x:.6f}, "
+        f"Ty = {expected_y:.6f}, "
+        f"Tz = {expected_z:.6f}"
+    )
 
     # series-resistance identity for two half-cells with contrast
-    strip = build_grid(type(cfg.grid)(nx=2, ny=1))
+    strip = build_grid(type(cfg.grid)(nx=2, ny=1, nz=1))
     k = np.array([50.0, 500.0])
     T2 = face_transmissibility(strip, k)[0]
     area, half = strip.dy * strip.dz, strip.dx / 2.0

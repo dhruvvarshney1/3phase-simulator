@@ -100,7 +100,8 @@ def _field_to_2d(field: np.ndarray, nx: int, ny: int) -> np.ndarray:
     README §4.1) into a 2D (ny, nx) array suitable for ``imshow`` with
     ``origin="lower"`` (row j = y-index, column i = x-index).
     """
-    return np.asarray(field).reshape(ny, nx)
+    values = np.asarray(field)
+    return values.reshape(-1, ny, nx)[values.size // (nx * ny) // 2]
 
 
 def well_markers(ctx: ReservoirModel) -> Tuple[List[Tuple[int, int]], List[Tuple[int, int]]]:
@@ -108,10 +109,8 @@ def well_markers(ctx: ReservoirModel) -> Tuple[List[Tuple[int, int]], List[Tuple
     nx, _, _, _ = grid_dims(ctx.grid)
     if ctx.wells is None:
         return [], []
-    prod = ctx.wells.producer_cell
-    inj = ctx.wells.injector_cell
-    prod_xy = [(int(prod % nx), int(prod // nx))]
-    inj_xy = [(int(inj % nx), int(inj // nx))]
+    prod_xy = [ctx.grid.cell_ij(ctx.wells.producer_cell)]
+    inj_xy = [ctx.grid.cell_ij(ctx.wells.injector_cell)]
     return prod_xy, inj_xy
 
 
@@ -589,10 +588,15 @@ def generate_mvp_report(
     cfg = sim_output["config"]
 
     written: Dict[str, Any] = {}
-    written["rock_maps"] = plot_rock_maps(ctx, outdir)
-    written["snapshots"] = plot_snapshots(snapshots, ctx, outdir, times=snapshot_times)
+    if plt is None:
+        written["rock_maps"] = []
+        written["snapshots"] = []
+        written["timeseries_plots"] = []
+    else:
+        written["rock_maps"] = plot_rock_maps(ctx, outdir)
+        written["snapshots"] = plot_snapshots(snapshots, ctx, outdir, times=snapshot_times)
+        written["timeseries_plots"] = plot_timeseries(df, outdir)
     written["timeseries_csv"] = save_timeseries_csv(df, outdir)
-    written["timeseries_plots"] = plot_timeseries(df, outdir)
     written["config_json"] = save_run_config(cfg, outdir, seed=seed)
 
     x0 = None

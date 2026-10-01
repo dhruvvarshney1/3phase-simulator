@@ -1,0 +1,18 @@
+{
+  "oil_in_place_initial": 676051.0201548745,
+  "oil_in_place_final": 537430.258719047,
+  "oil_delta": -138620.7614358276,
+  "oil_cum_produced": 138620.7614358256,
+  "oil_rel_error": 1.427679700038344e-14,
+  "water_in_place_initial": 270420.40806194977,
+  "water_in_place_final": 350223.17927660723,
+  "water_delta": 79802.77121465746,
+  "water_cum_produced": 197.22878534252683,
+  "water_cum_injected": 80000.0,
+  "water_rel_error": 1.8234849500682606e-16,
+  "gas_in_place_initial": 405630612.0929247,
+  "gas_in_place_final": 318334499.92147076,
+  "gas_delta": -87296112.17145395,
+  "gas_cum_produced": 87296112.17145106,
+  "gas_rel_error": 3.311516629662406e-14
+}

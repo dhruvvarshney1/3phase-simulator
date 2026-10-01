@@ -18,6 +18,8 @@ Jacobian machinery.
 import numpy as np
 from scipy.sparse.linalg import spsolve
 
+from config import default_config, override
+from pvt import PVT
 from residual import accumulation, pack_state, unpack_state, compute_residual
 from jacobian import build_jacobian
 from conftest import make_context
@@ -40,7 +42,7 @@ def _dirichlet_residual_and_jacobian(x, x_prev, ctx, dt, left_cell, right_cell, 
     return R, J.tocsr()
 
 
-def _solve_dirichlet_steady(x0, ctx, left_cell, right_cell, p_left, p_right, dt=1.0e8, max_iter=30):
+def _solve_dirichlet_steady(x0, ctx, left_cell, right_cell, p_left, p_right, dt=1.0e12, max_iter=30):
     """Drive dt -> very large so the accumulation term vanishes relative to
     the flux term, i.e. directly solve the steady (elliptic) Darcy problem
     implicitly via the same residual/Jacobian machinery used elsewhere."""
@@ -66,6 +68,9 @@ def test_single_phase_1d_darcy_steady_state():
 
     ctx = make_context(nx=nx, ny=ny, dx=dx, dy=dy, dz=dz, phi=0.18, k=k_val,
                         wells=None)
+    constant_pvt = override(default_config(), "pvt", bo_comp=0.0, bw_comp=0.0,
+                            muo_slope=0.0)
+    ctx = ctx.__class__(**{**ctx.__dict__, "pvt": PVT(constant_pvt.pvt)})
     nc = ctx.grid.n_cells
 
     swc = ctx.relperm.cfg.swc
@@ -104,3 +109,4 @@ def test_single_phase_1d_darcy_steady_state():
 
     assert np.all(np.isfinite(q_face))
     assert np.any(q_face > 0.0)
+    np.testing.assert_allclose(p_final, p_analytic, rtol=2e-2, atol=2e-2)

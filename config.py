@@ -7,7 +7,8 @@ seeds via :func:`save_config`.
 
 Factories
 ---------
-``default_config()``     -- MVP configuration (30x30, 1000 days).
+``default_config()``     -- legacy MVP configuration (30x30, 1000 days).
+``synthetic_config()``   -- primary geological-flow configuration.
 ``smoke_test_config()``  -- 15x15, 200 days, fewer RF cases (< ~60 s end-to-end).
 ``case_config(base, params)`` -- apply one Latin-hypercube sample to a base config.
 
@@ -30,11 +31,11 @@ from typing import Any, Dict, List, Mapping, Tuple, get_type_hints
 # ---------------------------------------------------------------------------
 @dataclass(frozen=True)
 class GridConfig:
-    """Cartesian grid (README section 4.1). Uniform spacing; nz must be 1."""
+    """Cartesian grid (README section 4.1). Uniform spacing; k = 0 is the top layer."""
 
     nx: int = 30
     ny: int = 30
-    nz: int = 1
+    nz: int = 3
     dx: float = 50.0   # ft
     dy: float = 50.0   # ft
     dz: float = 20.0   # ft
@@ -74,6 +75,12 @@ class PVTConfig:
     mug: float = 0.02
     p_bubble: float = 2500.0
     rs_bubble: float = 600.0   # SCF/STB
+    # Constant phase gravity gradients rho*g [psi/ft]. 0 = gravity off (legacy
+    # uniform-state configs); initial_state_model.py sets them from the densities
+    # used to build the hydrostatic initial state so that state is in equilibrium.
+    gamma_w: float = 0.0
+    gamma_o: float = 0.0
+    gamma_g: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -128,16 +135,24 @@ class WellConfig:
 
     producer_bhp: float = 1500.0                      # psi
     producer_ij: Tuple[int, int] | None = None        # default (nx-3, ny-3)
+    producer_k: int = 1                               # zero-based layer
     injector_rate: float = 400.0                      # STB/day water
     injector_ij: Tuple[int, int] = (2, 2)
+    injector_k: int = 1                               # zero-based layer
     r_w: float = 0.25                                 # ft
     skin: float = 0.0
     r_e_factor: float = 0.14                          # r_e = factor*sqrt(dx^2+dy^2)
     producer_no_backflow: bool = True                 # clamp flow reversal
 
-    def producer_cell(self, nx: int, ny: int) -> Tuple[int, int]:
-        """Return the producer (i, j), defaulting to (nx-3, ny-3)."""
-        return self.producer_ij if self.producer_ij is not None else (nx - 3, ny - 3)
+    def producer_cell(self, nx: int, ny: int, nz: int = 1) -> Tuple[int, int, int]:
+        """Return the producer (i, j, k), defaulting near the far corner."""
+        i, j = self.producer_ij if self.producer_ij is not None else (nx - 3, ny - 3)
+        return i, j, min(max(self.producer_k, 0), nz - 1)
+
+    def injector_cell(self, nz: int = 1) -> Tuple[int, int, int]:
+        """Return the injector (i, j, k) location."""
+        i, j = self.injector_ij
+        return i, j, min(max(self.injector_k, 0), nz - 1)
 
 
 @dataclass(frozen=True)
@@ -258,8 +273,17 @@ class SimulationConfig:
 # Factories
 # ---------------------------------------------------------------------------
 def default_config() -> SimulationConfig:
-    """Return the MVP configuration (README section 12)."""
+    """Return the small, uniform-state MVP configuration used by unit tests."""
     return SimulationConfig()
+
+
+def synthetic_config() -> SimulationConfig:
+    """Return solver settings for the primary synthetic geological case.
+
+    The geological grid and state are supplied by ``initial_state_model``;
+    this config carries the black-oil, Newton, timestep, and output settings.
+    """
+    return SimulationConfig(name="synthetic")
 
 
 def smoke_test_config() -> SimulationConfig:
@@ -345,10 +369,8 @@ def validate_config(cfg: SimulationConfig, check_wells: bool = True) -> None:
     """
     g, s, rp, w, ts, nw = cfg.grid, cfg.init, cfg.relperm, cfg.wells, cfg.timestep, cfg.newton
 
-    if g.nz != 1:
-        raise ValueError("only nz == 1 (2D) grids are supported")
-    if g.nx < 1 or g.ny < 1:
-        raise ValueError("nx and ny must be >= 1")
+    if g.nx < 1 or g.ny < 1 or g.nz < 1:
+        raise ValueError("nx, ny, and nz must be >= 1")
     if min(g.dx, g.dy, g.dz) <= 0.0:
         raise ValueError("cell dimensions must be positive")
 
@@ -368,12 +390,12 @@ def validate_config(cfg: SimulationConfig, check_wells: bool = True) -> None:
         raise ValueError("invalid permeability bounds")
 
     if check_wells:
-        pi, pj = w.producer_cell(g.nx, g.ny)
-        ii, ij = w.injector_ij
-        for label, (ci, cj) in (("producer", (pi, pj)), ("injector", (ii, ij))):
-            if not (0 <= ci < g.nx and 0 <= cj < g.ny):
-                raise ValueError(f"{label} cell ({ci}, {cj}) lies outside the grid")
-        if (pi, pj) == (ii, ij):
+        pi, pj, pk = w.producer_cell(g.nx, g.ny, g.nz)
+        ii, ij, ik = w.injector_cell(g.nz)
+        for label, (ci, cj, ck) in (("producer", (pi, pj, pk)), ("injector", (ii, ij, ik))):
+            if not (0 <= ci < g.nx and 0 <= cj < g.ny and 0 <= ck < g.nz):
+                raise ValueError(f"{label} cell ({ci}, {cj}, {ck}) lies outside the grid")
+        if (pi, pj, pk) == (ii, ij, ik):
             raise ValueError("producer and injector must be in different cells")
         if w.producer_bhp <= nw.p_min or w.injector_rate < 0.0:
             raise ValueError("invalid well controls")

@@ -56,37 +56,44 @@ class RelPermResult:
 class RelPerm:
     """Vectorized Corey relative permeability model."""
 
-    def __init__(self, cfg: RelPermConfig) -> None:
+    def __init__(self, cfg: RelPermConfig, swc: np.ndarray | None = None) -> None:
+        """``swc`` optionally gives a per-cell connate water saturation (facies
+        endpoints) that replaces the scalar ``cfg.swc``."""
         if min(cfg.krw_exp, cfg.kro_exp, cfg.krg_exp) < 1.0:
             raise ValueError("Corey exponents must be >= 1 (smooth at zero saturation)")
         self.cfg = cfg
-        self.denom = 1.0 - cfg.swc - cfg.sor - cfg.sgc
-        if self.denom <= 0.0:
+        self.swc = cfg.swc if swc is None else np.asarray(swc, dtype=float)
+        self.denom = 1.0 - self.swc - cfg.sor - cfg.sgc
+        if np.any(self.denom <= 0.0):
             raise ValueError("relperm endpoints leave no mobile saturation range")
 
-    def effective_saturations(self, sw: np.ndarray, sg: np.ndarray):
+    def effective_saturations(self, sw: np.ndarray, sg: np.ndarray, cells=None):
         """Return (S_we, S_ge, S_oe, dS_we/dS_w, dS_ge/dS_g, mask_oe).
 
         ``mask_oe`` is 1 where S_oe is not clipped (so dS_oe = -dS_we - dS_ge).
+        ``cells`` selects the per-cell endpoints when ``sw`` is a subset of cells.
         """
         c = self.cfg
+        swc, denom = self.swc, self.denom
+        if cells is not None and np.ndim(swc):
+            swc, denom = swc[cells], denom[cells]
         sw_a = np.asarray(sw, dtype=float)
         sg_a = np.asarray(sg, dtype=float)
-        swe_raw = (sw_a - c.swc) / self.denom
-        sge_raw = (sg_a - c.sgc) / self.denom
+        swe_raw = (sw_a - swc) / denom
+        sge_raw = (sg_a - c.sgc) / denom
         swe = np.clip(swe_raw, 0.0, 1.0)
         sge = np.clip(sge_raw, 0.0, 1.0)
         soe_raw = 1.0 - swe - sge
         soe = np.clip(soe_raw, 0.0, 1.0)
-        dswe = np.where((swe_raw > 0.0) & (swe_raw < 1.0), 1.0 / self.denom, 0.0)
-        dsge = np.where((sge_raw > 0.0) & (sge_raw < 1.0), 1.0 / self.denom, 0.0)
+        dswe = np.where((swe_raw > 0.0) & (swe_raw < 1.0), 1.0 / denom, 0.0)
+        dsge = np.where((sge_raw > 0.0) & (sge_raw < 1.0), 1.0 / denom, 0.0)
         mask_oe = np.where(soe_raw > 0.0, 1.0, 0.0)
         return swe, sge, soe, dswe, dsge, mask_oe
 
-    def evaluate(self, sw: np.ndarray | float, sg: np.ndarray | float) -> RelPermResult:
+    def evaluate(self, sw: np.ndarray | float, sg: np.ndarray | float, cells=None) -> RelPermResult:
         """Evaluate k_rw, k_ro, k_rg and all partial derivatives at (S_w, S_g)."""
         c = self.cfg
-        swe, sge, soe, dswe, dsge, mask_oe = self.effective_saturations(sw, sg)
+        swe, sge, soe, dswe, dsge, mask_oe = self.effective_saturations(sw, sg, cells)
 
         krw = c.krw_max * swe ** c.krw_exp
         kro = c.kro_max * soe ** c.kro_exp

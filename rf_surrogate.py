@@ -18,7 +18,7 @@ from grid import pack_state, unpack_state
 FEATURE_NAMES = (
     "p", "sw", "sg", "phi", "perm", "distance_producer", "distance_injector",
     "injector_rate", "producer_bhp", "dt", "time", "neighbor_p", "neighbor_sw",
-    "neighbor_sg", "delta_p", "delta_sw", "delta_sg",
+    "neighbor_sg",
 )
 
 
@@ -33,23 +33,18 @@ def build_features(x: np.ndarray, model: Any, dt: float, time_days: float,
         injector_rate = np.zeros(grid.n_cells)
         producer_bhp = np.zeros(grid.n_cells)
     else:
-        producer_distance = grid.distance_to_cell(*grid.cell_ij(model.wells.producer_cell))
-        injector_distance = grid.distance_to_cell(*grid.cell_ij(model.wells.injector_cell))
+        producer_distance = grid.distance_to_cell(*grid.cell_ijk(model.wells.producer_cell))
+        injector_distance = grid.distance_to_cell(*grid.cell_ijk(model.wells.injector_cell))
         injector_rate = np.full(grid.n_cells, model.wells.injector_rate)
         producer_bhp = np.full(grid.n_cells, model.wells.producer_bhp)
-    if x_prev is None:
-        delta_p = np.zeros_like(p)
-        delta_sw = np.zeros_like(sw)
-        delta_sg = np.zeros_like(sg)
-    else:
-        old_p, old_sw, old_sg = unpack_state(x_prev)
-        delta_p, delta_sw, delta_sg = p - old_p, sw - old_sw, sg - old_sg
+    # Do not expose temporal differences: the production inference API only
+    # has the current state. Keeping dead delta columns made train/inference
+    # features inconsistent and encouraged leakage from future snapshots.
     return np.column_stack((
         p, sw, sg, model.rock.phi0, model.rock.perm,
         producer_distance, injector_distance, injector_rate, producer_bhp,
         np.full(grid.n_cells, dt), np.full(grid.n_cells, time_days),
         grid.neighbor_mean(p), grid.neighbor_mean(sw), grid.neighbor_mean(sg),
-        delta_p, delta_sw, delta_sg,
     ))
 
 
@@ -77,7 +72,7 @@ class RFSurrogate:
         p = np.maximum(p, model.cfg.newton.p_min)
         sw = np.clip(sw, 0.0, 1.0)
         sg = np.clip(sg, 0.0, 1.0)
-        max_total = 1.0 - model.relperm.cfg.sor
+        max_total = 1.0
         total = sw + sg
         mask = total > max_total
         sw[mask] *= max_total / total[mask]
@@ -103,14 +98,27 @@ class RFSurrogate:
         return cls(payload["model"], tuple(payload.get("feature_names", FEATURE_NAMES)))
 
 
-def save_dataset(path: str | Path, features: np.ndarray, targets: np.ndarray) -> None:
+def save_dataset(path: str | Path, features: np.ndarray, targets: np.ndarray,
+                 groups: np.ndarray | None = None) -> None:
     """Save a portable training dataset."""
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    np.savez_compressed(path, features=np.asarray(features), targets=np.asarray(targets),
-                        feature_names=np.asarray(FEATURE_NAMES))
+    payload = {"features": np.asarray(features), "targets": np.asarray(targets),
+               "feature_names": np.asarray(FEATURE_NAMES)}
+    if groups is not None:
+        payload["groups"] = np.asarray(groups)
+    np.savez_compressed(path, **payload)
 
 
 def load_dataset(path: str | Path) -> tuple[np.ndarray, np.ndarray]:
     data = np.load(path)
     return np.asarray(data["features"], dtype=float), np.asarray(data["targets"], dtype=float)
+
+
+def load_dataset_with_groups(path: str | Path) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Load RF data and require a simulation-case group for leakage-free splits."""
+    data = np.load(path)
+    if "groups" not in data:
+        raise ValueError("dataset has no simulation groups; regenerate it before training")
+    return (np.asarray(data["features"], dtype=float),
+            np.asarray(data["targets"], dtype=float), np.asarray(data["groups"]))

@@ -1,0 +1,400 @@
+{
+  "disclaimer": "SYNTHETIC model. All ranges are illustrative; not calibrated to any real field.",
+  "grid": {
+    "Nx": 40,
+    "Ny": 40,
+    "Nz": 10,
+    "Lx": 1000.0,
+    "Ly": 1000.0,
+    "Lz": 50.0,
+    "dx": 25.0,
+    "dy": 25.0,
+    "dz": 5.0,
+    "depth_convention": "positive downward; k=0 is the top layer",
+    "array_shape": "(Nx,Ny,Nz) C-order, indexing='ij'"
+  },
+  "structure": {
+    "top_depth": 2000.0,
+    "dip_x": 0.005,
+    "dip_y": 0.003,
+    "dome_center": [
+      600.0,
+      400.0
+    ],
+    "dome_amplitude": 15.0,
+    "dome_radius": 350.0
+  },
+  "seed": 20240601,
+  "facies_codes": {
+    "shale": 0,
+    "shaly_sandstone": 1,
+    "sandstone": 2,
+    "channel_sandstone": 3
+  },
+  "facies_definitions": {
+    "shale": {
+      "name": "shale",
+      "code": 0,
+      "phi_mean": 0.05,
+      "phi_std": 0.015,
+      "phi_min": 0.01,
+      "phi_max": 0.1,
+      "logk_a": -3.0,
+      "logk_b": 20.0,
+      "logk_sigma": 0.4,
+      "k_min": 0.0001,
+      "k_max": 0.5,
+      "kv_kh": 0.05,
+      "kv_kh_sigma_log10": 0.3,
+      "swc": 1.0,
+      "net": false
+    },
+    "shaly_sandstone": {
+      "name": "shaly_sandstone",
+      "code": 1,
+      "phi_mean": 0.13,
+      "phi_std": 0.03,
+      "phi_min": 0.06,
+      "phi_max": 0.2,
+      "logk_a": -1.5,
+      "logk_b": 15.0,
+      "logk_sigma": 0.5,
+      "k_min": 0.1,
+      "k_max": 50.0,
+      "kv_kh": 0.1,
+      "kv_kh_sigma_log10": 0.3,
+      "swc": 0.35,
+      "net": true
+    },
+    "sandstone": {
+      "name": "sandstone",
+      "code": 2,
+      "phi_mean": 0.2,
+      "phi_std": 0.035,
+      "phi_min": 0.12,
+      "phi_max": 0.28,
+      "logk_a": -0.5,
+      "logk_b": 12.0,
+      "logk_sigma": 0.4,
+      "k_min": 5.0,
+      "k_max": 1000.0,
+      "kv_kh": 0.2,
+      "kv_kh_sigma_log10": 0.25,
+      "swc": 0.22,
+      "net": true
+    },
+    "channel_sandstone": {
+      "name": "channel_sandstone",
+      "code": 3,
+      "phi_mean": 0.26,
+      "phi_std": 0.03,
+      "phi_min": 0.18,
+      "phi_max": 0.34,
+      "logk_a": 0.3,
+      "logk_b": 11.0,
+      "logk_sigma": 0.35,
+      "k_min": 100.0,
+      "k_max": 8000.0,
+      "kv_kh": 0.35,
+      "kv_kh_sigma_log10": 0.2,
+      "swc": 0.15,
+      "net": true
+    }
+  },
+  "layer_sequence": [
+    "shale",
+    "shaly_sandstone",
+    "sandstone",
+    "sandstone",
+    "shale",
+    "shaly_sandstone",
+    "sandstone",
+    "sandstone",
+    "shaly_sandstone",
+    "shale"
+  ],
+  "channels": [
+    {
+      "name": "CH1",
+      "layers": [
+        2,
+        3
+      ],
+      "y0": 300.0,
+      "amplitude": 180.0,
+      "wavelength": 800.0,
+      "phase": 0.3,
+      "width": 140.0
+    },
+    {
+      "name": "CH2",
+      "layers": [
+        6,
+        7
+      ],
+      "y0": 650.0,
+      "amplitude": 120.0,
+      "wavelength": 650.0,
+      "phase": 2.0,
+      "width": 110.0
+    }
+  ],
+  "heterogeneity": {
+    "corr_len_xy": 180.0,
+    "corr_len_z": 6.0,
+    "spectrum": "gaussian",
+    "fractal_beta": 3.0,
+    "ky_kx_ratio": 0.85
+  },
+  "property_ranges": {
+    "phi": [
+      0.016269501095719868,
+      0.2851080724252401
+    ],
+    "kx": [
+      0.0005678687440761657,
+      9750.000000000004
+    ],
+    "kz": [
+      5.863700443547922e-06,
+      3004.1409030130926
+    ]
+  },
+  "faults": [
+    {
+      "name": "F1",
+      "x0": 560.0,
+      "y0": 0.0,
+      "z0": 2000.0,
+      "strike_deg": 75.0,
+      "dip_deg": 80.0,
+      "curvature": 0.0002,
+      "trans_mult": 0.02,
+      "thickness": 12.0,
+      "id": 1,
+      "strike_vec": [
+        0.25881904510252074,
+        0.9659258262890683,
+        0.0
+      ],
+      "normal_vec": [
+        -0.9512512425641977,
+        0.25488700224417876,
+        -0.17364817766693041
+      ],
+      "point": [
+        560.0,
+        0.0,
+        2000.0
+      ],
+      "n_cells": 198,
+      "n_faces": 543
+    }
+  ],
+  "fault_note": "Face arrays index internal faces. Throw/juxtaposition not modelled.",
+  "fractures": [
+    {
+      "name": "FR1",
+      "xc": 300.0,
+      "yc": 700.0,
+      "strike_deg": 30.0,
+      "length": 350.0,
+      "width": 25.0,
+      "layers": [
+        1,
+        2,
+        3
+      ],
+      "aperture_mm": 0.5,
+      "k_mult_along": 40.0,
+      "k_mult_across": 4.0,
+      "kz_mult": 10.0,
+      "id": 1,
+      "corners_x": [
+        445.30444566227675,
+        457.80444566227675,
+        154.69555433772322,
+        142.19555433772322
+      ],
+      "corners_y": [
+        798.3253175473055,
+        776.6746824526945,
+        601.6746824526945,
+        623.3253175473055
+      ],
+      "n_cells": 42,
+      "representation": "equivalent_continuum"
+    },
+    {
+      "name": "FR2",
+      "xc": 750.0,
+      "yc": 250.0,
+      "strike_deg": 120.0,
+      "length": 280.0,
+      "width": 25.0,
+      "layers": [
+        5,
+        6,
+        7
+      ],
+      "aperture_mm": 0.3,
+      "k_mult_along": 25.0,
+      "k_mult_across": 3.0,
+      "kz_mult": 8.0,
+      "id": 2,
+      "corners_x": [
+        669.1746824526945,
+        690.8253175473055,
+        830.8253175473055,
+        809.1746824526945
+      ],
+      "corners_y": [
+        364.99355652982143,
+        377.49355652982143,
+        135.00644347017857,
+        122.50644347017857
+      ],
+      "n_cells": 36,
+      "representation": "equivalent_continuum"
+    },
+    {
+      "name": "FR3",
+      "xc": 200.0,
+      "yc": 250.0,
+      "strike_deg": 60.0,
+      "length": 200.0,
+      "width": 25.0,
+      "layers": [
+        6,
+        7,
+        8
+      ],
+      "aperture_mm": 0.4,
+      "k_mult_along": 30.0,
+      "k_mult_across": 3.0,
+      "kz_mult": 8.0,
+      "id": 3,
+      "corners_x": [
+        239.17468245269453,
+        260.8253175473055,
+        160.82531754730547,
+        139.17468245269453
+      ],
+      "corners_y": [
+        342.85254037844385,
+        330.35254037844385,
+        157.14745962155615,
+        169.64745962155615
+      ],
+      "n_cells": 24,
+      "representation": "equivalent_continuum"
+    }
+  ],
+  "fracture_note": "Equivalent-continuum corridors (matrix perm multipliers). Not a DFM.",
+  "fluids": {
+    "owc_depth": 2040.0,
+    "transition_zone": 4.0,
+    "p_ref": 20400000.0,
+    "depth_ref": 2040.0,
+    "rho_w": 1020.0,
+    "rho_o": 800.0,
+    "pressure_convention": "P = P_ref + rho g (D - D_ref); D positive downward"
+  },
+  "wells": [
+    {
+      "name": "INJ1",
+      "type": "injector",
+      "x": 150.0,
+      "y": 150.0,
+      "i": 6,
+      "j": 6,
+      "cell_x": 162.5,
+      "cell_y": 162.5,
+      "perforated_layers": [
+        1,
+        2,
+        3,
+        5,
+        6,
+        7,
+        8
+      ],
+      "perforation_depths": [
+        2003.34479276072,
+        2008.34479276072,
+        2013.34479276072,
+        2023.34479276072,
+        2028.34479276072,
+        2033.34479276072,
+        2038.34479276072
+      ],
+      "perforated_facies": [
+        "shaly_sandstone",
+        "shaly_sandstone",
+        "shaly_sandstone",
+        "shaly_sandstone",
+        "sandstone",
+        "sandstone",
+        "sandstone"
+      ],
+      "control": "rate",
+      "value": 300.0,
+      "units": "m3/day",
+      "rw": 0.1,
+      "skin": 0.0,
+      "geometry": "vertical",
+      "perforation_rule": "reservoir"
+    },
+    {
+      "name": "PROD1",
+      "type": "producer",
+      "x": 640.0,
+      "y": 430.0,
+      "i": 25,
+      "j": 17,
+      "cell_x": 637.5,
+      "cell_y": 437.5,
+      "perforated_layers": [
+        1,
+        2,
+        3,
+        5,
+        6,
+        7,
+        8
+      ],
+      "perforation_depths": [
+        1997.1712092909875,
+        2002.1712092909875,
+        2007.1712092909875,
+        2017.1712092909875,
+        2022.1712092909875,
+        2027.1712092909875,
+        2032.1712092909875
+      ],
+      "perforated_facies": [
+        "shaly_sandstone",
+        "sandstone",
+        "sandstone",
+        "shaly_sandstone",
+        "shaly_sandstone",
+        "sandstone",
+        "shaly_sandstone"
+      ],
+      "control": "bhp",
+      "value": 17000000.0,
+      "units": "Pa",
+      "rw": 0.1,
+      "skin": 0.0,
+      "geometry": "vertical",
+      "perforation_rule": "oil_reservoir"
+    }
+  ],
+  "units": {
+    "length": "m",
+    "pressure": "Pa",
+    "permeability": "mD",
+    "density": "kg/m3",
+    "md_to_m2": 9.869233e-16
+  }
+}

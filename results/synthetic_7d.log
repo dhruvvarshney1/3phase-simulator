@@ -1,0 +1,13 @@
+[run_mvp] mode=synthetic init=previous jacobian=analytical seed=42
+[simulator] step 1: t=1.00d dt=1.00 iters=7 cuts=0 p_avg=2939.5 psi qo=752.9 qw=0.0 STB/d qg=451735 SCF/d
+[simulator] step 2: t=2.00d dt=1.00 iters=6 cuts=0 p_avg=2941.9 psi qo=704.8 qw=0.0 STB/d qg=422890 SCF/d
+[simulator] step 3: t=3.00d dt=1.00 iters=6 cuts=0 p_avg=2944.5 psi qo=692.2 qw=0.0 STB/d qg=415338 SCF/d
+[simulator] step 4: t=4.00d dt=1.00 iters=6 cuts=0 p_avg=2947.2 psi qo=691.1 qw=0.0 STB/d qg=414633 SCF/d
+[simulator] step 5: t=5.00d dt=1.00 iters=6 cuts=0 p_avg=2949.9 psi qo=695.2 qw=0.0 STB/d qg=417091 SCF/d
+[simulator] step 6: t=6.00d dt=1.00 iters=6 cuts=0 p_avg=2952.8 psi qo=701.9 qw=0.0 STB/d qg=421159 SCF/d
+[simulator] step 7: t=7.00d dt=1.00 iters=5 cuts=0 p_avg=2955.7 psi qo=710.1 qw=0.0 STB/d qg=426071 SCF/d
+[run_mvp] Completed 7 time steps in 475.60 s wall time.
+[run_mvp] Total Newton iterations: 42 (mean 6.00/step); dt cuts: 0
+[run_mvp] Global mass balance relative errors: oil=3.666e-12  water=1.490e-13  gas=2.853e-12
+[run_mvp] Mass balance check PASSED (< 1e-6 relative error).
+[run_mvp] All outputs written to: results/synthetic_7d

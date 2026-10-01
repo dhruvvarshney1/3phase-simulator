@@ -1,7 +1,7 @@
 """High-level simulation loop built on residual.ReservoirModel."""
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 import numpy as np
 import pandas as pd
 
@@ -14,14 +14,18 @@ from wells import injector_bhp, producer_rates
 __all__ = ["build_context", "compute_well_rates", "run_simulation"]
 
 
-def build_context(cfg: SimulationConfig):
-    validate_config(cfg)
-    model = build_model(cfg)
-    x0 = pack_state(
-        np.full(model.grid.n_cells, cfg.init.p_init),
-        np.full(model.grid.n_cells, cfg.init.sw_init),
-        np.full(model.grid.n_cells, cfg.init.sg_init),
-    )
+def build_context(cfg: SimulationConfig, model=None, x0: Optional[np.ndarray] = None):
+    """Return (model, x0, diagnostics). ``model``/``x0`` override the uniform
+    config-built model (e.g. from ``initial_state_model.build_from_initial_state``)."""
+    if model is None:
+        validate_config(cfg)
+        model = build_model(cfg)
+    if x0 is None:
+        x0 = pack_state(
+            np.full(model.grid.n_cells, cfg.init.p_init),
+            np.full(model.grid.n_cells, cfg.init.sw_init),
+            np.full(model.grid.n_cells, cfg.init.sg_init),
+        )
     m0 = accumulation(model, x0)
     return model, x0, {
         "ooip_stb": float(m0[:, 1].sum()),
@@ -34,8 +38,9 @@ def compute_well_rates(x: np.ndarray, model) -> Dict[str, Any]:
         return {"producers": [], "injectors": [], "totals": {"qw_prod": 0.0, "qo_prod": 0.0, "qg_prod": 0.0, "qw_inj": 0.0}}
     p, sw, sg = unpack_state(x)
     w = model.wells
-    rates = producer_rates(w, model.pvt, model.relperm, float(p[w.producer_cell]), float(sw[w.producer_cell]), float(sg[w.producer_cell]))
-    inj_bhp = injector_bhp(w, model.pvt, model.relperm, float(p[w.injector_cell]), float(sw[w.injector_cell]), float(sg[w.injector_cell]))
+    pc, ic = w.producer_cells, w.injector_cells
+    rates = producer_rates(w, model.pvt, model.relperm, p[pc], sw[pc], sg[pc])
+    inj_bhp = injector_bhp(w, model.pvt, model.relperm, p[ic], sw[ic], sg[ic])
     return {
         "producers": [{"cell": w.producer_cell, "qw": rates.q_w, "qo": rates.q_o, "qg": rates.q_g_total, "bhp": w.producer_bhp, "p_cell": float(p[w.producer_cell])}],
         "injectors": [{"cell": w.injector_cell, "qw": w.injector_rate, "bhp_est": inj_bhp, "p_cell": float(p[w.injector_cell])}],
@@ -49,12 +54,14 @@ def _snapshot(x: np.ndarray) -> Dict[str, np.ndarray]:
 
 
 def run_simulation(cfg: SimulationConfig, init_guess_mode: str = "previous", rf_model: Optional[Any] = None,
-                   jacobian_method: str = "analytical", verbose: bool = True) -> Dict[str, Any]:
+                   jacobian_method: str = "analytical", verbose: bool = True,
+                   live_callback: Optional[Callable[[float, np.ndarray, Any, Dict[str, float]], None]] = None,
+                   model=None, x0: Optional[np.ndarray] = None) -> Dict[str, Any]:
     if init_guess_mode not in ("previous", "rf"):
         raise ValueError("init_guess_mode must be 'previous' or 'rf'")
     if init_guess_mode == "rf" and rf_model is None:
         raise ValueError("init_guess_mode='rf' requires rf_model")
-    model, x0, diagnostics = build_context(cfg)
+    model, x0, diagnostics = build_context(cfg, model, x0)
     ts_cfg = cfg.timestep
     ts_params = TimeStepParams(
         dt_init=ts_cfg.stages[0][2], dt_min=ts_cfg.dt_min, dt_max=max(s[3] for s in ts_cfg.stages),
@@ -64,7 +71,8 @@ def run_simulation(cfg: SimulationConfig, init_guess_mode: str = "previous", rf_
         phase_dt_caps=[s[3] for s in ts_cfg.stages])
     stepper = TimeStepper(ts_params, ts_cfg.t_end, ts_cfg.report_times)
     params = NewtonParams(tol=cfg.newton.tol, max_iter=cfg.newton.max_iter, alpha_min=cfg.newton.alpha_min,
-                          p_min=cfg.newton.p_min, dp_rel_tol=cfg.newton.dp_tol_rel, ds_tol=cfg.newton.ds_tol)
+                          p_min=cfg.newton.p_min, p_scale=cfg.newton.p_scale,
+                          dp_rel_tol=cfg.newton.dp_tol_rel, ds_tol=cfg.newton.ds_tol)
     report_times = sorted(set(ts_cfg.report_times) | {ts_cfg.t_end})
     x, t, dt = x0.copy(), 0.0, stepper.initial_dt()
     snapshots = {0.0: _snapshot(x)}
@@ -98,12 +106,16 @@ def run_simulation(cfg: SimulationConfig, init_guess_mode: str = "previous", rf_
                      "cum_water_inj_stb": cumulative["qw_inj"], "water_cut": qw / (qw + qo) if qw + qo else 0.0,
                      "gor": qg / qo if qo else 0.0, "recovery_factor": cumulative["qo_prod"] / diagnostics["ooip_stb"],
                      "final_scaled_residual": result.final_scaled_residual})
+        if live_callback is not None:
+            live_callback(t, result.x, model, rows[-1])
         if any(abs(t - rt) < 1e-6 for rt in report_times):
             snapshots[float(t)] = _snapshot(result.x)
         x = result.x
         dt = stepper.propose_next(t, result.n_iterations, dt_try)
-        if verbose and (steps % 10 == 0 or t >= ts_cfg.t_end - 1e-9):
-            print(f"[simulator] step {steps}: t={t:.2f}d iters={result.n_iterations}")
+        if verbose:
+            print(f"[simulator] step {steps}: t={t:.2f}d dt={dt_try:.2f} iters={result.n_iterations} "
+                  f"cuts={cuts} p_avg={np.mean(p):.1f} psi qo={qo:.1f} qw={qw:.1f} STB/d "
+                  f"qg={qg:.0f} SCF/d", flush=True)
     return {"timeseries": pd.DataFrame(rows), "snapshots": snapshots,
             "summary": {"n_steps": steps, "total_newton_iterations": total_iters,
                          "mean_newton_iterations": total_iters / steps if steps else 0.0,

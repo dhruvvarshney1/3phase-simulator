@@ -15,8 +15,13 @@ with the in-place (accumulation) masses, PV0 = Vb / 5.615 [bbl]:
 
 Face flux (positive from the left to the right cell of a face):
 
-    q_a,ij = T_ij * lambda_a,up * (p_left - p_right),   lambda_a = k_ra / (mu_a B_a)
-    dissolved gas flux = R_s,up * q_o,ij               (R_s of the oil-upstream cell)
+    q_a,ij = T_ij * lambda_a,up(a) * dPhi_a,           lambda_a = k_ra / (mu_a B_a)
+    dPhi_a = (p_left - p_right) - gamma_a * (D_left - D_right)
+    dissolved gas flux = R_s,up(o) * q_o,ij            (R_s of the oil-upstream cell)
+
+gamma_a = rho_a g [psi/ft] is a constant per phase (``cfg.pvt.gamma_*``, zero =
+no gravity) and D is depth, positive downward (``grid.depth``). Each phase is
+upwinded on its own potential. P_c = 0, so all phases share p.
 
 Sign convention: a face flux q leaves the left cell (+q) and enters the right
 cell (-q). Q is the net well source (positive = injection).
@@ -185,13 +190,21 @@ class FaceFluxes:
     q_g_diss: np.ndarray
 
 
-def compute_face_fluxes(model: ReservoirModel, f: CellFields, ups: FaceUpstream) -> FaceFluxes:
-    """Compute upwinded two-point fluxes of all phases on every face."""
-    t_dp = model.trans * ups.dp
-    q_w = t_dp * f.lam_w[ups.up]
-    q_o = t_dp * f.lam_o[ups.up]
-    q_gf = t_dp * f.lam_g[ups.up]
-    q_gd = f.props.rs[ups.up] * q_o
+def phase_upstream(model: ReservoirModel, p: np.ndarray) -> tuple[FaceUpstream, ...]:
+    """Return the (water, oil, gas) upstream selections from the phase potentials."""
+    g = model.grid
+    d_depth = g.depth[g.face_left] - g.depth[g.face_right]
+    c = model.cfg.pvt
+    return tuple(select_upstream(g, p, gamma * d_depth) for gamma in (c.gamma_w, c.gamma_o, c.gamma_g))
+
+
+def compute_face_fluxes(model: ReservoirModel, f: CellFields, ups: tuple[FaceUpstream, ...]) -> FaceFluxes:
+    """Compute phase-upwinded two-point fluxes of all phases on every face."""
+    uw, uo, ug = ups
+    q_w = model.trans * uw.dp * f.lam_w[uw.up]
+    q_o = model.trans * uo.dp * f.lam_o[uo.up]
+    q_gf = model.trans * ug.dp * f.lam_g[ug.up]
+    q_gd = f.props.rs[uo.up] * q_o
     return FaceFluxes(q=np.column_stack([q_w, q_o, q_gf + q_gd]), q_g_free=q_gf, q_g_diss=q_gd)
 
 
@@ -211,8 +224,8 @@ def well_source(model: ReservoirModel, f: CellFields) -> tuple[np.ndarray, Optio
     if model.wells is None:
         return q, None
     terms = well_terms(model.wells, model.pvt, model.relperm, f.p, f.sw, f.sg)
-    q[terms.producer_cell, :] += terms.q_prod
-    q[terms.injector_cell, :] += terms.q_inj
+    np.add.at(q, terms.producer_cells, terms.q_prod)
+    np.add.at(q, terms.injector_cells, terms.q_inj)
     return q, terms
 
 
@@ -229,7 +242,7 @@ class ResidualEvaluation:
     divergence: np.ndarray        # (n, 3)
     source: np.ndarray            # (n, 3)
     fields: CellFields
-    upstream: FaceUpstream
+    upstream: tuple               # (water, oil, gas) FaceUpstream
     fluxes: FaceFluxes
     terms: Optional[WellTerms]
 
@@ -242,7 +255,7 @@ def evaluate_residual(model: ReservoirModel, x: np.ndarray, m_old: np.ndarray,
     if np.shape(m_old) != (model.grid.n_cells, NVAR):
         raise ValueError("m_old must have shape (n_cells, 3)")
     f = evaluate_cells(model, x)
-    ups = select_upstream(model.grid, f.p)
+    ups = phase_upstream(model, f.p)
     fluxes = compute_face_fluxes(model, f, ups)
     div = flux_divergence(model, fluxes)
     src, terms = well_source(model, f)
@@ -298,8 +311,8 @@ def well_rates(model: ReservoirModel, x: np.ndarray) -> Dict[str, float]:
         "water_cut": r.q_w / liquid if liquid > 0.0 else 0.0,
         "gor": r.q_g_total / r.q_o if r.q_o > 0.0 else 0.0,
         "producer_bhp": w.producer_bhp,
-        "injector_bhp": injector_bhp(w, model.pvt, model.relperm, p[w.injector_cell],
-                                     sw[w.injector_cell], sg[w.injector_cell]),
+        "injector_bhp": injector_bhp(w, model.pvt, model.relperm, p[w.injector_cells],
+                                     sw[w.injector_cells], sg[w.injector_cells]),
         "p_prod_cell": float(p[w.producer_cell]), "p_inj_cell": float(p[w.injector_cell]),
     }
 
@@ -336,7 +349,7 @@ def main() -> None:
     print("flux divergence sums to zero for all phases (relative < 1e-12)")
 
     # 4. Hand-computed two-cell case with dissolved gas
-    two = build_model(override(cfg, "grid", nx=2, ny=1), with_wells=False)
+    two = build_model(override(cfg, "grid", nx=2, ny=1, nz=1), with_wells=False)
     p = np.array([3000.0, 2900.0])
     sw, sg = np.array([0.40, 0.30]), np.array([0.02, 0.0])
     x2 = pack_state(p, sw, sg)

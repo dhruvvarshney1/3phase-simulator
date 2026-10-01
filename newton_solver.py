@@ -16,7 +16,7 @@ Algorithm (one call = one attempted time step of size ``dt``):
          would violate physical bounds "substantially", or while the
          resulting (clipped) residual norm is larger than the current one;
        - after the damping search, hard-clip: p >= p_min, 0 <= Sw <= 1,
-         0 <= Sg <= 1, Sw + Sg <= 1 - S_or (proportional rescale).
+         0 <= Sg <= 1, Sw + Sg <= 1 (proportional rescale).
     5. Accept the damped/clipped state, recompute R, go to 2.
     6. Converged when BOTH the scaled residual criterion (a) AND the
        increment criteria (b) max|dp|/p_ref < tol_p and max|dS| < tol_s
@@ -68,6 +68,7 @@ class NewtonParams:
     max_iter: int = 12           # max Newton iterations per time step
     alpha_min: float = 0.1       # minimum damping factor
     p_min: float = 100.0         # hard pressure floor [psi] (README §5.4)
+    p_scale: float = 4000.0      # pressure-update reference [psi]
     dp_rel_tol: float = 1.0e-6   # criterion (b): max|dp|/p_ref
     ds_tol: float = 1.0e-6       # criterion (b): max|dS|
 
@@ -150,7 +151,10 @@ def clip_state(x: np.ndarray, ctx: ReservoirModel, params: NewtonParams) -> np.n
         p    >= p_min
         0    <= Sw <= 1
         0    <= Sg <= 1
-        Sw + Sg <= 1 - S_or   (proportional rescale of Sw, Sg if violated)
+        Sw + Sg <= 1          (S_o >= 0; proportional rescale of Sw, Sg if violated)
+
+    The bound is S_o >= 0, not S_o >= S_or: cells legitimately start at
+    S_w = 1 (water leg, shale), and S_or only limits oil *mobility* (k_ro = 0).
 
     This is applied *after* the damping search settles on a step length, as
     a final safety net. It is a pragmatic engineering choice (not
@@ -165,8 +169,7 @@ def clip_state(x: np.ndarray, ctx: ReservoirModel, params: NewtonParams) -> np.n
     np.clip(sw, 0.0, 1.0, out=sw)
     np.clip(sg, 0.0, 1.0, out=sg)
 
-    sor = float(ctx.relperm.cfg.sor)
-    max_total = 1.0 - sor
+    max_total = 1.0
     total = sw + sg
     over = total > max_total
     if np.any(over):
@@ -185,7 +188,7 @@ def _damped_trial(
     x: np.ndarray,
     dx: np.ndarray,
     res_norm_current: float,
-    x_prev: np.ndarray,
+    m_old: np.ndarray,
     ctx: ReservoirModel,
     dt: float,
     params: NewtonParams,
@@ -201,14 +204,14 @@ def _damped_trial(
     -------
     x_clip, R_trial, res_norm_trial, alpha_used
     """
-    p_ref = float(getattr(ctx.pvt, "p_ref", 4000.0))
+    p_ref = float(params.p_scale)
     alpha = 1.0
     while True:
         x_raw = x + alpha * dx
         violation = _bound_violation_raw(x_raw, p_ref)
         x_clip = clip_state(x_raw, ctx, params)
-        R_trial = compute_residual(ctx, x_clip, accumulation(ctx, x_prev), dt)
-        res_norm_trial = float(np.max(np.abs(R_trial)))
+        R_trial = compute_residual(ctx, x_clip, m_old, dt)
+        res_norm_trial = scaled_residual_norm(R_trial, residual_scales(ctx, m_old, dt))
         residual_increased = res_norm_trial > res_norm_current
 
         if (not violation and not residual_increased) or alpha <= params.alpha_min + 1.0e-12:
@@ -257,7 +260,7 @@ def newton_solve(
     """
     x = x0.copy()
     nc = ctx.grid.n_cells
-    p_ref = float(ctx.pvt.cfg.p_ref)
+    p_ref = float(params.p_scale)
     m_old = accumulation(ctx, x_prev)
     scale = residual_scales(ctx, m_old, dt)
 
@@ -289,7 +292,7 @@ def newton_solve(
             break
 
         x_new, R_new, res_norm_new, alpha = _damped_trial(
-            x, dx, res_norm, x_prev, ctx, dt, params
+            x, dx, res_norm, m_old, ctx, dt, params
         )
         alpha_history.append(alpha)
 
